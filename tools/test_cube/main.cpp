@@ -124,7 +124,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l)
 
 HWND CreateMainWindow(HINSTANCE inst)
 {
-    const wchar_t* cls = L"RetroInterceptTestCube";
+    const wchar_t* cls = L"CRenderTestCube";
     WNDCLASSEXW wc = {};
     wc.cbSize        = sizeof(wc);
     wc.lpfnWndProc   = &WndProc;
@@ -135,7 +135,7 @@ HWND CreateMainWindow(HINSTANCE inst)
 
     RECT rc = { 0, 0, kWidth, kHeight };
     AdjustWindowRect(&rc, WS_OVERLAPPEDWINDOW, FALSE);
-    return CreateWindowExW(0, cls, L"RetroIntercept test cube [F1 = toggle PS]",
+    return CreateWindowExW(0, cls, L"CRender test cube [F1 = toggle PS]",
                            WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT,
                            rc.right - rc.left, rc.bottom - rc.top,
                            nullptr, nullptr, inst, nullptr);
@@ -323,7 +323,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int showCmd)
         {
             const double fps = frames * 1000.0 / static_cast<double>(now - lastFpsTick);
             wchar_t title[128];
-            swprintf_s(title, L"RetroIntercept test cube — %s PS — %.0f fps [F1 toggles]",
+            swprintf_s(title, L"CRender test cube — %s PS — %.0f fps [F1 toggles]",
                        g_heavyPs ? L"HEAVY" : L"light", fps);
             SetWindowTextW(hwnd, title);
             frames = 0;

@@ -77,11 +77,13 @@ $RECYCLE.BIN/
 captures/
 *.rdc
 
-# --- Generated screenshots / verification images ---
-RetroIntercept/verify_*.png
-RetroIntercept/dense_*.png
-RetroIntercept/intscale.png
-RetroIntercept/heaven_ascii_1440p.png
+# --- Generated screenshots / verification images (repo root) ---
+# Samples kept under docs/images/ are tracked; stray captures at root are not.
+/verify_*.png
+/dense_*.png
+/det_in_*.png
+/intscale.png
+/heaven_*.png
 
 # --- ONNX models / large binaries ---
 # Uncomment if models should not be committed:
@@ -102,4 +104,4 @@ venv/
 
 # --- Third-party download artifacts ---
 # Uncomment if third_party should be fetched rather than committed:
-# RetroIntercept/third_party/onnxruntime/
+# third_party/onnxruntime/

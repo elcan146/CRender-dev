@@ -64,7 +64,7 @@ void ResolveIp(UINT_PTR ip, char* out) noexcept
 // that lock or be mid-load -> deadlock).
 void SnapshotModules(HMODULE self) noexcept
 {
-    SnapshotModule(self, "retrointercept");
+    SnapshotModule(self, "crender");
     SnapshotModule(GetModuleHandleW(nullptr), "exe");
     HMODULE mods[256] = {};
     DWORD need = 0;
@@ -184,7 +184,7 @@ LONG WINAPI CrashVeh(EXCEPTION_POINTERS* ep) noexcept
 DWORD WINAPI InitThread(LPVOID module) noexcept
 {
     Log::Init();
-    Log::Info("proxy", "RetroIntercept d3d11.dll loaded (Phase 4: retro modes + hotkeys)");
+    Log::Info("proxy", "CRender d3d11.dll loaded (Phase 4: retro modes + hotkeys)");
 
     g_veh = AddVectoredExceptionHandler(1, &CrashVeh); // first in the chain
     SnapshotModules(static_cast<HMODULE>(module));
@@ -240,7 +240,7 @@ BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID reserved)
                 g_veh = nullptr;
             }
             hooks::Shutdown();
-            Log::Info("proxy", "RetroIntercept unloaded");
+            Log::Info("proxy", "CRender unloaded");
             Log::Shutdown();
         }
     }

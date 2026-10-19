@@ -57,7 +57,7 @@ void OpenConsole() noexcept
         if (cw != nullptr)
             SetWindowPos(cw, nullptr, 40, 40, s_w * 8 + 16, s_h * 16 + 40, SWP_NOZORDER);
         SetConsoleWindowInfo(g_con, TRUE, &rc);
-        SetConsoleTitleA("RetroIntercept — console wireframe");
+        SetConsoleTitleA("CRender — console wireframe");
     }
     g_conW = static_cast<UINT>(s_w);
     g_conH = static_cast<UINT>(s_h);

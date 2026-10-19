@@ -251,7 +251,7 @@ def build(width: int, height: int, two_input: bool, a) -> onnx.ModelProto:
 
     outputs = [helper.make_tensor_value_info("styled", TensorProto.FLOAT, shape)]
     graph = helper.make_graph(nodes, f"retro_{a.style}", inputs, outputs, inits)
-    model = helper.make_model(graph, producer_name="RetroIntercept",
+    model = helper.make_model(graph, producer_name="CRender",
                               opset_imports=[helper.make_opsetid("", 17)])
     model.ir_version = 8  # loadable by every ORT release that still ships win-x86
     onnx.checker.check_model(model)

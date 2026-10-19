@@ -1,4 +1,4 @@
-// Thread-safe rotating file logger; writes RetroIntercept.log next to the proxy DLL.
+// Thread-safe rotating file logger; writes CRender.log next to the proxy DLL.
 #include "Log.h"
 
 #include <Windows.h>
@@ -59,7 +59,7 @@ void RotateIfLarge(const char* fullPath) noexcept
         return;
 
     char prev[MAX_PATH] = {};
-    _snprintf_s(prev, _TRUNCATE, "%s\\RetroIntercept.1.log", g_dir);
+    _snprintf_s(prev, _TRUNCATE, "%s\\CRender.1.log", g_dir);
     wchar_t wprev[MAX_PATH] = {};
     MultiByteToWideChar(CP_UTF8, 0, prev, -1, wprev, MAX_PATH);
     MoveFileExW(wpath, wprev, MOVEFILE_REPLACE_EXISTING);
@@ -76,7 +76,7 @@ void Log::Init() noexcept
     ResolveModuleDir();
 
     char path[MAX_PATH] = {};
-    _snprintf_s(path, _TRUNCATE, "%s\\RetroIntercept.log", g_dir[0] ? g_dir : ".");
+    _snprintf_s(path, _TRUNCATE, "%s\\CRender.log", g_dir[0] ? g_dir : ".");
     RotateIfLarge(path);
 
     g_file = _fsopen(path, "ab", _SH_DENYNO); // shared: tail-able while running

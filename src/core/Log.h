@@ -1,4 +1,4 @@
-// Thread-safe rotating file logger; writes RetroIntercept.log next to the proxy DLL.
+// Thread-safe rotating file logger; writes CRender.log next to the proxy DLL.
 #pragma once
 
 #include <cstdarg>
@@ -9,7 +9,7 @@ public:
     enum class Severity { Debug, Info, Warn, Error };
 
     // Opens the log in append mode in the directory containing this module.
-    // Rotates to RetroIntercept.1.log when the file exceeds kMaxBytes.
+    // Rotates to CRender.1.log when the file exceeds kMaxBytes.
     static void Init() noexcept;
     static void Shutdown() noexcept;
 

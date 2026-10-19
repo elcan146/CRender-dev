@@ -1,7 +1,7 @@
-"""RetroIntercept controller - pick ANY game folder, Apply, Rewind to undo.
+"""CRender Wizard - pick ANY game folder, Apply, Rewind to undo.
 
     pip install PyQt6
-    python tools/retroctl_gui.py
+    python tools/CRender_wizard.py
 
 - Finds the real game .exe anywhere under the picked folder (e.g. Yakuza 0\\media,
   UE <Game>\\Binaries\\Win64) and installs next to it with the matching x86/x64 DLL.
@@ -23,7 +23,8 @@ from PyQt6.QtWidgets import (
 )
 
 ROOT = Path(__file__).resolve().parent.parent
-MANIFEST = ".retroctl.json"
+MANIFEST = ".crenderctl.json"
+LEGACY_MANIFEST = ".retroctl.json"   # installs made by retroctl.ps1 pre-rename
 BAK_SUFFIX = ".retro-bak"
 TEMPLATE = ROOT / "config" / "retro.json"
 
@@ -122,21 +123,23 @@ def find_game_exe(folder: Path) -> Path | None:
 
 
 def find_manifest(folder: Path) -> Path | None:
-    if (folder / MANIFEST).exists():
-        return folder / MANIFEST
+    for name in (MANIFEST, LEGACY_MANIFEST):
+        if (folder / name).exists():
+            return folder / name
     base_depth = len(folder.parts)
     for dirpath, dirnames, filenames in os.walk(folder):
         depth = len(Path(dirpath).parts) - base_depth
         dirnames[:] = [d for d in dirnames if depth < SCAN_DEPTH]
-        if MANIFEST in filenames:
-            return Path(dirpath) / MANIFEST
+        for name in (MANIFEST, LEGACY_MANIFEST):
+            if name in filenames:
+                return Path(dirpath) / name
     return None
 
 
 class Window(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("RetroIntercept")
+        self.setWindowTitle("CRender Wizard")
         self.setMinimumWidth(520)
         self.folder: Path | None = None
         self.exe: Path | None = None
@@ -238,7 +241,12 @@ class Window(QMainWindow):
 
     # ---- manifest ----------------------------------------------------------
     def manifest_path(self) -> Path:
-        return self.target / MANIFEST
+        p = self.target / MANIFEST
+        if not p.exists():
+            legacy = self.target / LEGACY_MANIFEST
+            if legacy.exists():
+                return legacy
+        return p
 
     def installed_entries(self) -> list[dict]:
         try:
@@ -333,7 +341,7 @@ class Window(QMainWindow):
                 r = QMessageBox.question(
                     self, "Direct3D 11 not detected",
                     "This game doesn't reference d3d11 — it may use D3D9/D3D12/Vulkan/OpenGL, "
-                    "which RetroIntercept can't hook. Install anyway?")
+                    "which CRender can't hook. Install anyway?")
                 if r != QMessageBox.StandardButton.Yes:
                     return
 
@@ -408,7 +416,7 @@ class Window(QMainWindow):
             self.refresh()
             return
         self.manifest_path().unlink(missing_ok=True)
-        (self.target / "RetroIntercept.log").unlink(missing_ok=True)
+        (self.target / "CRender.log").unlink(missing_ok=True)
         msg = "Rewound — the game runs stock again."
         if restored:
             msg += f" Restored originals: {', '.join(restored)}"

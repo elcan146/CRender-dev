@@ -1,14 +1,14 @@
-﻿# retroctl.ps1 - apply/remove RetroIntercept in a game folder.
+﻿# crenderctl.ps1 - apply/remove CRender in a game folder.
 #
 # Usage:
-#   .\tools\retroctl.ps1 -Path "F:\Heaven Benchmark 4.0\bin" -Enable
-#   .\tools\retroctl.ps1 -Path "F:\Heaven Benchmark 4.0\bin" -Enable -Neural
-#   .\tools\retroctl.ps1 -Path "F:\Heaven Benchmark 4.0\bin" -Status
-#   .\tools\retroctl.ps1 -Path "F:\Heaven Benchmark 4.0\bin" -Disable
+#   .\tools\crenderctl.ps1 -Path "F:\Heaven Benchmark 4.0\bin" -Enable
+#   .\tools\crenderctl.ps1 -Path "F:\Heaven Benchmark 4.0\bin" -Enable -Neural
+#   .\tools\crenderctl.ps1 -Path "F:\Heaven Benchmark 4.0\bin" -Status
+#   .\tools\crenderctl.ps1 -Path "F:\Heaven Benchmark 4.0\bin" -Disable
 #
 # -Enable copies d3d11.dll + retro.json next to the game exe (-Neural adds the
 # ONNX Runtime/DirectML runtime + models). -Disable removes exactly what
-# -Enable installed (tracked via a .retroctl.json manifest in the game dir).
+# -Enable installed (tracked via a .crenderctl.json manifest in the game dir).
 
 [CmdletBinding()]
 param(
@@ -24,7 +24,9 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $root     = Split-Path $PSScriptRoot -Parent
-$manifest = Join-Path $Path '.retroctl.json'
+$manifest = Join-Path $Path '.crenderctl.json'
+$legacy   = Join-Path $Path '.retroctl.json'
+if (-not (Test-Path $manifest) -and (Test-Path $legacy)) { $manifest = $legacy }
 
 $coreFiles = @(
     @{ Src = Join-Path $root 'build\win32\Release\d3d11.dll'; Dst = 'd3d11.dll' },
@@ -59,13 +61,13 @@ if (-not (Test-Path $Path)) { throw "Game folder not found: $Path" }
 if ($Status) {
     if (Test-Path $manifest) {
         $m = Get-Content $manifest -Raw | ConvertFrom-Json
-        Write-Host "RetroIntercept is ENABLED in $Path"
+        Write-Host "CRender is ENABLED in $Path"
         $m.files | ForEach-Object {
             $ok = Test-Path (Join-Path $Path $_)
             Write-Host ("  {0} {1}" -f $(if ($ok) {'[ok]'} else {'[MISSING]'}), $_)
         }
     } else {
-        Write-Host "RetroIntercept is NOT installed in $Path"
+        Write-Host "CRender is NOT installed in $Path"
     }
     exit 0
 }
@@ -119,7 +121,7 @@ if ($Enable) {
 
 if ($Disable) {
     if (-not (Test-Path $manifest)) {
-        Write-Host "Nothing to remove (no .retroctl.json manifest in $Path)."
+        Write-Host "Nothing to remove (no .crenderctl.json manifest in $Path)."
         exit 0
     }
     $m = Get-Content $manifest -Raw | ConvertFrom-Json

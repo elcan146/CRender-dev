@@ -95,7 +95,7 @@ def build(width: int, height: int, edge_gain: float, edge_thr: float, bg_luma: f
         [helper.make_tensor_value_info("frame", TensorProto.FLOAT, shape)],
         [helper.make_tensor_value_info("styled", TensorProto.FLOAT, shape)],
         inits)
-    model = helper.make_model(graph, producer_name="RetroIntercept",
+    model = helper.make_model(graph, producer_name="CRender",
                               opset_imports=[helper.make_opsetid("", 17)])
     model.ir_version = 8  # loadable by ORT 1.22.1 (last win-x86 DirectML release)
     for k, v in (("edge_gain", edge_gain), ("edge_threshold", edge_thr), ("bg_luma", bg_luma)):

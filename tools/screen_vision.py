@@ -1,17 +1,17 @@
-"""Screen Vision — faithful desktop port of RetroIntercept's Terminator
+"""Screen Vision — faithful desktop port of CRender's Terminator
 pipeline. Same decode (raw ONNX output, letterbox undo, per-class NMS 0.45,
 crop-fill rejection, cross-crop dedup, sqrt weapon remap, optional stage-2
 classifier), same tracker (IoU/EMA/coast/lock), same HUD (8x8 glyph atlas,
 columns, reticle, OBB brackets, sight lines) — drawn on a transparent
 click-through overlay over your live desktop, or in a styled mirror window.
 
-  python tools\\ai\\screen_vision.py                    # Terminator HUD overlay
-  python tools\\ai\\screen_vision.py --style term       # Terminator base mirror
-  python tools\\ai\\screen_vision.py --style retro      # RetroFX mirror
-  python tools\\ai\\screen_vision.py --style ascii      # ASCII mirror
-  python tools\\ai\\screen_vision.py --monitor 2
-  python tools\\ai\\screen_vision.py --all
-  python tools\\ai\\screen_vision.py --conf 0.30 --stride 2
+  python tools\\screen_vision.py                    # Terminator HUD overlay
+  python tools\\screen_vision.py --style term       # Terminator base mirror
+  python tools\\screen_vision.py --style retro      # RetroFX mirror
+  python tools\\screen_vision.py --style ascii      # ASCII mirror
+  python tools\\screen_vision.py --monitor 2
+  python tools\\screen_vision.py --all
+  python tools\\screen_vision.py --conf 0.30 --stride 2
 
 Hotkeys (polled globally, like in-game): F8 cycle palette, F9 cycle style,
 F10 panic hide/show, F11 reload retro.json, End quit.
@@ -49,7 +49,7 @@ except Exception:
     dxcam = None
 
 ort.set_default_logger_severity(4)  # fatal only — silences CUDA probe noise
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[1]
 CFG_PATH = ROOT / "config" / "retro.json"
 # Auto-pick the best EP: DirectML (GPU — same backend the in-game ORT path
 # uses) > CUDA > CPU. DML init is fast and needs no CUDA runtime DLLs.
@@ -193,10 +193,14 @@ class Config:
         self.cls_conf = min(max(cc, 0.50), 0.99)
         self.max_dets = 32
         self.max_targets = int(cfg.get("HudMaxTargets", 6))
-        self.classes = _csv_ids(a.classes or cfg.get("DetClasses", "person")) or [0]
+        self.classes = [c for c in _csv_ids(a.classes or cfg.get(
+            "DetClasses", "person")) or [0] if c != 43]       # no COCO knife
         self.weapons = set(_csv_ids(a.weapons or cfg.get("DetWeapon", "")))
-        self.classes2 = _csv_ids(a.classes2 or cfg.get("DetClasses2", "0,1")) or [0, 1]
+        self.weapons.discard(43)
+        self.classes2 = [c for c in _csv_ids(a.classes2 or cfg.get(
+            "DetClasses2", "0,1")) or [0, 1] if c != 1]       # no KNIFE
         self.weapons2 = set(_csv_ids(a.weapons2 or cfg.get("DetWeapon2", "0,1")))
+        self.weapons2.discard(1)
         self.person_cls = 0                        # g_cfg.personClass
         # HUD toggles
         self.hud = bool(cfg.get("TermHud", True))
@@ -970,7 +974,7 @@ class Grabber:
 # ------------------------------------------------------------------ main -----
 def main() -> None:
     ap = argparse.ArgumentParser(description="Screen Vision — faithful desktop "
-                                     "port of the RetroIntercept Terminator pipeline")
+                                     "port of the CRender Terminator pipeline")
     ap.add_argument("--style", choices=list(STYLES), default="hud",
                     help="hud = transparent overlay; others = styled mirror")
     ap.add_argument("--monitor", type=int, default=1, help="1-based monitor index")

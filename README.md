@@ -1,7 +1,9 @@
-# RetroIntercept
+# CRender
 
 D3D11 proxy DLL that intercepts a game's rendering pipeline and re-presents frames in a
 retro style: **GPU ASCII shader pass** (primary) and/or **CPU console wireframe** (secondary).
+
+![ASCII mode in Unigine Heaven](docs/images/heaven_ascii_1440p.png)
 
 > Offline / single-player targets only. Graphics-layer interception (ReShade/DXVK category).
 > No game-state writes, no anti-cheat interaction.
@@ -84,11 +86,30 @@ style-transfer art, drop in any fp32 NCHW `[1,3,H,W]` ONNX as `retro_ai.onnx`.
 - Proxy test: copy `d3d11.dll` next to `test_cube.exe` (once Phase 2 exports exist).
 - Heaven: copy `d3d11.dll` to `F:\Heaven Benchmark 4.0\bin\`, select Direct3D11 in the launcher.
 
+## Tools
+
+See [`tools/README.md`](tools/README.md). Quick start:
+
+```powershell
+python tools/CRender_wizard.py    # GUI installer — pick a game folder, Apply, Rewind to undo
+.\tools\crenderctl.ps1 -Path "<game dir>" -Enable   # CLI equivalent
+python tools/screen_vision.py     # desktop preview of the Terminator/ASCII pipeline
+```
+
 ## Layout
 
-Per `d3d11-retro-engine-agent-prompt.md` section 4 — `src/proxy`, `src/core`, `src/d3d11`,
-`src/render`, `src/re`, `config/`, `tools/`. Placeholder dirs fill in per phase.
+```
+src/proxy/    d3d11.dll export forwarding + proxy entry
+src/core/     config + logging
+src/d3d11/    hooks, render passes, state tracking
+src/ai/       ONNX Runtime / DirectML inference
+src/term/     HUD + target tracker
+config/       retro.json, ONNX models, per-game configs
+docs/         agent prompt, internals notes, sample images
+tools/        installer GUI/CLI, AI helpers, test_cube
+third_party/  MinHook, ONNX Runtime, style models
+```
 
 ## Safety / legal
 
-For games you own, offline, no anti-cheat. See the agent prompt §2.1 for the full constraints.
+For games you own, offline, no anti-cheat. See `docs/agent-prompt.md` §2.1 for the full constraints.

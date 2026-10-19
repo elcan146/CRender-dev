@@ -1,7 +1,7 @@
 """wrap_style.py - repackage a fixed-shape ONNX style model for RetroMode::Neural.
 
 Wraps a model like fast_neural_style (zoo models expect [1,3,224,224] fp32 in 0..255)
-into RetroIntercept's contract: input 'frame' / output 'styled', [1,3,H,W] fp32, 0..1.
+into CRender's contract: input 'frame' / output 'styled', [1,3,H,W] fp32, 0..1.
 
     styled = Clip(Resize(Core(Resize(frame -> in) *255) -> out) /255, 0, 1)
 
@@ -90,7 +90,7 @@ def main() -> None:
                               [helper.make_tensor_value_info("frame", TensorProto.FLOAT, shape)],
                               [helper.make_tensor_value_info("styled", TensorProto.FLOAT, shape)],
                               inits)
-    model = helper.make_model(graph, producer_name="RetroIntercept-wrap",
+    model = helper.make_model(graph, producer_name="CRender-wrap",
                               opset_imports=[helper.make_opsetid("", a.target_opset)])
     model.ir_version = 8
     onnx.checker.check_model(model)

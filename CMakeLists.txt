@@ -1,6 +1,6 @@
-# RetroIntercept — D3D11 proxy DLL + test harness (/MT, C++20). Builds x86 and x64.
+# CRender — D3D11 proxy DLL + test harness (/MT, C++20). Builds x86 and x64.
 cmake_minimum_required(VERSION 3.21)
-project(RetroIntercept LANGUAGES CXX)
+project(CRender LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -10,9 +10,9 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
 if(CMAKE_SIZEOF_VOID_P EQUAL 8)
-  message(STATUS "RetroIntercept: x64 build (works in 64-bit D3D11 games)")
+  message(STATUS "CRender: x64 build (works in 64-bit D3D11 games)")
 else()
-  message(STATUS "RetroIntercept: x86 build (works in 32-bit D3D11 games)")
+  message(STATUS "CRender: x86 build (works in 32-bit D3D11 games)")
 endif()
 
 add_subdirectory(third_party/minhook)
@@ -100,10 +100,10 @@ if (EXISTS "${ORT_DIR}/include/onnxruntime_c_api.h" AND EXISTS "${ORT_DIR}/inclu
     AND EXISTS "${ORT_BIN}/onnxruntime.dll")
   target_include_directories(retro_proxy PRIVATE "${ORT_DIR}/include")
   target_compile_definitions(retro_proxy PRIVATE RETRO_HAVE_ORT=1)
-  message(STATUS "RetroIntercept: Terminator ONNX path enabled (ONNX Runtime at ${ORT_BIN})")
+  message(STATUS "CRender: Terminator ONNX path enabled (ONNX Runtime at ${ORT_BIN})")
 else()
   target_compile_definitions(retro_proxy PRIVATE RETRO_HAVE_ORT=0)
-  message(STATUS "RetroIntercept: Terminator ONNX path disabled (HLSL fallback) — run tools/ai/fetch_ort.ps1")
+  message(STATUS "CRender: Terminator ONNX path disabled (HLSL fallback) — run tools/ai/fetch_ort.ps1")
 endif()
 target_link_libraries(retro_proxy PRIVATE minhook)
 target_compile_options(retro_proxy PRIVATE
