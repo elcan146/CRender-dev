@@ -1,0 +1,12 @@
+# Python deps for tools/ai/*.py — model building, wrapping, verification, detection tests.
+# Used by docker/tools.Dockerfile; also usable on the host:  pip install -r tools/requirements.txt
+#
+# NOTE: screen_vision.py and CRender_wizard.py additionally need PyQt6 + mss and are
+# Windows-desktop only — they are intentionally not covered by this file/image.
+numpy>=1.26
+onnx>=1.16
+onnxruntime>=1.18          # CPU EP here; the shipped d3d11.dll uses ORT-DML on Windows
+pillow>=10.0
+opencv-python-headless>=4.8
+ultralytics>=8.2           # pulls torch; Dockerfile preinstalls the CPU wheel
+mss>=9.0                   # screen grab helper (Windows only feature, kept for parity)

@@ -80,6 +80,14 @@ posterize) built from pure DirectML-friendly ops — tune with `--pixels`, `--le
 `--saturation`, `--contrast`, or use `--style edge` for the old conv edge look. For actual
 style-transfer art, drop in any fp32 NCHW `[1,3,H,W]` ONNX as `retro_ai.onnx`.
 
+### Docker
+
+Two images under `docker/`: `tools.Dockerfile` (Linux, Python AI tooling) and
+`windows-build.Dockerfile` (Windows container with VS Build Tools that compiles
+`d3d11.dll`/`test_cube.exe` x86+x64 — extract via `docker cp`). The proxy's
+runtime — intercepting a real game on a GPU desktop — cannot run in a container.
+See [`docker/README.md`](docker/README.md).
+
 ## Test
 
 - `test_cube.exe` alone: rotating cube, title shows live FPS, **F1** toggles heavy↔light pixel shader.

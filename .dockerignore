@@ -1,0 +1,22 @@
+# Keep the Docker build context small; artifacts are produced inside the image.
+.git
+.gitignore
+build
+out
+captures
+.vs
+.vscode
+.idea
+**/__pycache__
+.venv
+venv
+*.pyc
+*.rdc
+*.log
+*.png
+!docs/images/**
+# Downloaded toolchains/runtimes — fetched inside the image instead.
+third_party/onnxruntime/bin
+third_party/onnxruntime/bin64
+third_party/onnxruntime/include
+tools/ai/yolov8n.pt
