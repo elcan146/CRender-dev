@@ -2964,7 +2964,11 @@ void hooks::LoadConfigFile() noexcept
         cfg::ReadString(buf, "DetWeapon2", weapons2, sizeof(weapons2));
         int detDump = 0;
         cfg::ReadInt(buf, "DetDump", &detDump);
+        char detModel3[260] = "";
+        cfg::ReadString(buf, "DetModel3", detModel3, sizeof(detModel3));
+        float detClsConf = 0.80f;
+        cfg::ReadFloat(buf, "DetClsConf", &detClsConf);
         det::SetConfig(detModel, detModel2, detConf, detStride, detSight, detLen,
-                       classes, weapons, classes2, weapons2, detDump);
+                       classes, weapons, classes2, weapons2, detDump, detModel3, detClsConf);
     }
 }

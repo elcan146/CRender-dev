@@ -81,12 +81,14 @@ void term::Tracker::Update(const Det* dets, int n, float dt, int maxTracks) noex
             tr.unseen = 0.0f;
             tr.cls = d.cls;
             tr.score = d.score;
+            ++tr.hits;
+            tr.ang = d.ang;
             trackUsed[best] = true;
         }
         else if (m_n < maxTracks)
         {
             Track& tr = m_tracks[m_n];
-            tr = { d.x0, d.y0, d.x1, d.y1, m_nextId++, 0.0f, 0.0f, 0.0f, false, d.cls, d.score };
+            tr = { d.x0, d.y0, d.x1, d.y1, m_nextId++, 0.0f, 0.0f, 0.0f, false, d.cls, d.score, d.ang, 1 };
             if (m_nextId > 99) m_nextId = 1; // "TGT nn" display range
             trackUsed[m_n] = true;
             ++m_n;

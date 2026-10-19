@@ -22,7 +22,9 @@ struct Config
 {
     char  model[260]  = "yolov8n.onnx";     // session 0 — "" disables detection
     char  model2[260] = "";                 // session 1 (optional, e.g. weapon-trained)
+    char  model3[260] = "";                 // session 2 (optional micro-classifier, P(weapon|crop))
     float conf      = 0.35f;                // DetConf
+    float clsConf   = 0.80f;                // DetClsConf — stage-2 keep threshold
     int   stride    = 2;                    // DetStride — infer every Nth present
     int   maxDets   = 32;
     bool  sight     = true;                 // DetSight — weapon sight lines
@@ -42,7 +44,8 @@ struct Config
 void SetConfig(const char* model, const char* model2, float conf, int stride,
                bool sight, float sightLen,
                const char* classesCsv, const char* weaponsCsv,
-               const char* classes2Csv, const char* weapons2Csv, int dump) noexcept;
+               const char* classes2Csv, const char* weapons2Csv, int dump,
+               const char* model3, float clsConf) noexcept;
 
 // Lazily builds D3D12/DML/ORT/buffers. Returns false (and latches) on failure.
 bool Ensure(ID3D11Device* dev) noexcept;

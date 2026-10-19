@@ -328,14 +328,64 @@ void Brackets(const term::Track* tr, int n, const char* const* labels, float w, 
         float col[4];
         memcpy(col, flash ? kRed : kNorm, sizeof(col));
         col[3] *= ease * (t.unseen > 0.0f ? 0.5f : 1.0f);
-        const float m = (hw < hh ? hw : hh) * 2.0f;
-        float L = m * 0.25f;
-        if (L < 4.0f * s) L = 4.0f * s;
-        const float th = s;
-        Rect(x0, y0, x0 + L, y0 + th, col); Rect(x0, y0, x0 + th, y0 + L, col);
-        Rect(x1 - L, y0, x1, y0 + th, col); Rect(x1 - th, y0, x1, y0 + L, col);
-        Rect(x0, y1 - th, x0 + L, y1, col); Rect(x0, y1 - L, x0 + th, y1, col);
-        Rect(x1 - L, y1 - th, x1, y1, col); Rect(x1 - th, y1 - L, x1, y1, col);
+        float lx = x0, ly;
+        if (t.ang != 0.0f)
+        {
+            // OBB: envelope -> true w/h in pixel space, then rotate the corners.
+            const float ca = fabsf(cosf(t.ang)), sa = fabsf(sinf(t.ang));
+            const float det2 = ca * ca - sa * sa;
+            const float ex = x1 - x0, ey = y1 - y0;
+            float rw = ex, rh = ey;
+            if (fabsf(det2) > 0.05f)
+            {
+                rw = (ex * ca - ey * sa) / det2;
+                rh = (ey * ca - ex * sa) / det2;
+                if (rw < 2.0f) rw = 2.0f;
+                if (rh < 2.0f) rh = 2.0f;
+            }
+            const float ax = cosf(t.ang) * rw * 0.5f, ay = sinf(t.ang) * rw * 0.5f;
+            const float bx = -sinf(t.ang) * rh * 0.5f, by = cosf(t.ang) * rh * 0.5f;
+            static const float kSu[4] = { -1.0f, 1.0f, 1.0f, -1.0f };
+            static const float kSv[4] = { -1.0f, -1.0f, 1.0f, 1.0f };
+            float qx[4], qy[4];
+            for (int q = 0; q < 4; ++q)
+            {
+                qx[q] = cx + ax * kSu[q] + bx * kSv[q];
+                qy[q] = cy + ay * kSu[q] + by * kSv[q];
+            }
+            for (int e = 0; e < 4; ++e)
+            {
+                const float xa = qx[e], ya = qy[e], xb = qx[(e + 1) & 3], yb = qy[(e + 1) & 3];
+                const float edx = xb - xa, edy = yb - ya;
+                const float elen = sqrtf(edx * edx + edy * edy);
+                if (elen < 1.0f)
+                    continue;
+                const int dots = static_cast<int>(elen / (3.0f * s));
+                for (int d = 0; d < dots && d < 96; ++d)
+                {
+                    const float u = static_cast<float>(d) * 3.0f * s;
+                    const float pxx = xa + edx * (u / elen), pyy = ya + edy * (u / elen);
+                    Rect(pxx - s, pyy - s, pxx + s, pyy + s, col);
+                }
+            }
+            lx = qx[0];
+            ly = qy[0];
+            for (int q = 1; q < 4; ++q)
+                if (qy[q] < ly) { ly = qy[q]; lx = qx[q]; }
+            ly -= lineH;
+        }
+        else
+        {
+            const float m = (hw < hh ? hw : hh) * 2.0f;
+            float L = m * 0.25f;
+            if (L < 4.0f * s) L = 4.0f * s;
+            const float th = s;
+            Rect(x0, y0, x0 + L, y0 + th, col); Rect(x0, y0, x0 + th, y0 + L, col);
+            Rect(x1 - L, y0, x1, y0 + th, col); Rect(x1 - th, y0, x1, y0 + L, col);
+            Rect(x0, y1 - th, x0 + L, y1, col); Rect(x0, y1 - L, x0 + th, y1, col);
+            Rect(x1 - L, y1 - th, x1, y1, col); Rect(x1 - th, y1 - L, x1, y1, col);
+            ly = y0 - lineH >= 0.0f ? y0 - lineH : y1 + 2.0f * s;
+        }
         char buf[32];
         const char* lbl = labels != nullptr ? labels[i] : nullptr;
         if (lbl != nullptr && lbl[0] != 0)
@@ -343,8 +393,7 @@ void Brackets(const term::Track* tr, int n, const char* const* labels, float w, 
                         static_cast<int>(t.score * 100.0f + 0.5f));
         else
             _snprintf_s(buf, _TRUNCATE, t.locked ? "TGT %02d LOCK" : "TGT %02d", t.id);
-        const float ly = y0 - lineH >= 0.0f ? y0 - lineH : y1 + 2.0f * s;
-        Text(x0, ly, s, buf, t.locked ? kRed : col);
+        Text(lx, ly, s, buf, t.locked ? kRed : col);
     }
 }
 

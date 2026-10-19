@@ -11,6 +11,7 @@ struct Det
     float x0, y0, x1, y1; // normalized, x0<x1, y0<y1
     float score;          // larger = more important (kept first when over budget)
     int   cls = -1;       // detector class id; -1 = unlabeled (mesh AABB scans)
+    float ang = 0.0f;     // OBB rotation, radians (0 = axis-aligned)
 };
 
 struct Track
@@ -23,6 +24,8 @@ struct Track
     bool  locked;         // age passed the lock threshold
     int   cls = -1;       // last matched detection's class (-1 = unlabeled)
     float score = 0.0f;   // last matched detection's score
+    float ang = 0.0f;     // OBB rotation, radians (0 = axis-aligned)
+    int   hits = 0;       // matched-pass count (confirmation gate)
 };
 
 class Tracker

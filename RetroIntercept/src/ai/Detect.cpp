@@ -11,7 +11,8 @@
 #if !RETRO_HAVE_ORT
 
 void det::SetConfig(const char*, const char*, float, int, bool, float,
-                    const char*, const char*, const char*, const char*, int) noexcept {}
+                    const char*, const char*, const char*, const char*, int,
+                    const char*, float) noexcept {}
 bool det::Ensure(ID3D11Device*) noexcept { return false; }
 void det::Run(ID3D11DeviceContext*, IDXGISwapChain*) noexcept {}
 const term::Track* det::Update(float, int, int* count) noexcept { if (count) *count = 0; return nullptr; }
@@ -112,6 +113,8 @@ struct Sess
     char            inName[128] = {};
     int             inW = 0, inH = 0;    // model input dims
     int             nCls = 0;            // 4 + nCls rows in the output
+    bool            obb = false;         // YOLO-OBB layout: 4 + nCls + 1(angle) rows
+    bool            classifier = false;  // sess2: [1,C] logits, P(weapon|crop)
     // bb-normalized source rect fed into this session's input — sess1 cascades
     // onto the previous pass's best person box (optical zoom for weapons).
     float           rectX = 0.0f, rectY = 0.0f, rectW = 1.0f, rectH = 1.0f;
@@ -121,7 +124,7 @@ struct Sess
 bool          g_failed = false;
 bool          g_ready  = false;
 ID3D11Device* g_dev    = nullptr; // non-owning
-Sess          g_sess[2];
+Sess          g_sess[3];
 
 ID3D12Device*              g_d12      = nullptr;
 ID3D12CommandQueue*        g_queue    = nullptr;
@@ -353,15 +356,25 @@ bool ReadOutputShape(Sess& s) noexcept
     const bool ok = ai::Ok(api->CastTypeInfoToTensorInfo(ti, &tsi), "CastTypeInfoToTensorInfo") &&
                     tsi != nullptr &&
                     ai::Ok(api->GetTensorElementType(tsi, &et), "GetTensorElementType") &&
-                    ai::Ok(api->GetDimensionsCount(tsi, &nd), "GetDimensionsCount") && nd == 3 &&
+                    ai::Ok(api->GetDimensionsCount(tsi, &nd), "GetDimensionsCount") &&
+                    (s.classifier ? nd == 2 : nd == 3) &&
                     ai::Ok(api->GetDimensions(tsi, dims, nd), "GetDimensions");
     api->ReleaseTypeInfo(ti);
+    if (s.classifier)
+    {
+        // Micro-classifier: [1, C] logits — C==1 (sigmoid) or C>=2 (softmax)
+        if (!ok || et != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT || dims[0] != 1 ||
+            dims[1] < 1 || dims[1] > 8)
+            return Fail("classifier output must be fp32 [1,C]");
+        s.nCls = static_cast<int>(dims[1]);
+        return true;
+    }
     if (!ok || et != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT || dims[0] != 1)
         return Fail("detector output must be fp32 [1,R,N]");
     const int64_t r = dims[1] < dims[2] ? dims[1] : dims[2]; // rows = 4 + nCls (the smaller dim)
-    if (r < 6 || r > 4 + 255)
+    if (r < 5 || r > 4 + 255)
         return Fail("unexpected detector output layout");
-    s.nCls = static_cast<int>(r) - 4;
+    s.nCls = static_cast<int>(r) - (s.obb ? 5 : 4);
     return true;
 }
 
@@ -680,16 +693,51 @@ void Decode(const Sess& s, int idx, const float* out, size_t elems, int64_t d1, 
         const float cw = (bbA / inA < 1.0f) ? bbA / inA : 1.0f;
         const float ch = (inA / bbA < 1.0f) ? inA / bbA : 1.0f;
         const float px = (1.0f - cw) * 0.5f, py = (1.0f - ch) * 0.5f;
-        const float u0 = s.rectX + (cx - bw * 0.5f - px) / cw * s.rectW;
-        const float u1 = s.rectX + (cx + bw * 0.5f - px) / cw * s.rectW;
-        const float v0 = s.rectY + (cy - bh * 0.5f - py) / ch * s.rectH;
-        const float v1 = s.rectY + (cy + bh * 0.5f - py) / ch * s.rectH;
+        float u0, u1, v0, v1;
+        float ang = 0.0f;
+        if (s.obb)
+        {
+            // OBB: the extra last row is the angle (radians). Rotate the
+            // half-extent axes in input space (square input => isotropic),
+            // map each rotated corner through letterbox+crop, take envelope.
+            ang = at(4 + s.nCls, c);
+            const float ca = cosf(ang), sa = sinf(ang);
+            const float ax = ca * bw * 0.5f, ay = sa * bw * 0.5f;   // w axis
+            const float bx = -sa * bh * 0.5f, by = ca * bh * 0.5f;  // h axis
+            u0 = u1 = s.rectX + (cx - px) / cw * s.rectW;
+            v0 = v1 = s.rectY + (cy - py) / ch * s.rectH;
+            for (int q = 0; q < 4; ++q)
+            {
+                const float su = (q & 1) ? 1.0f : -1.0f, sv = (q & 2) ? 1.0f : -1.0f;
+                const float mu = s.rectX + (cx + ax * su + bx * sv - px) / cw * s.rectW;
+                const float mv = s.rectY + (cy + ay * su + by * sv - py) / ch * s.rectH;
+                if (mu < u0) u0 = mu;
+                if (mu > u1) u1 = mu;
+                if (mv < v0) v0 = mv;
+                if (mv > v1) v1 = mv;
+            }
+        }
+        else
+        {
+            u0 = s.rectX + (cx - bw * 0.5f - px) / cw * s.rectW;
+            u1 = s.rectX + (cx + bw * 0.5f - px) / cw * s.rectW;
+            v0 = s.rectY + (cy - bh * 0.5f - py) / ch * s.rectH;
+            v1 = s.rectY + (cy + bh * 0.5f - py) / ch * s.rectH;
+        }
         term::Det& d = raw[nRaw];
         d.x0 = Clamp01(u0); d.y0 = Clamp01(v0);
         d.x1 = Clamp01(u1); d.y1 = Clamp01(v1);
         d.score = best;
         d.cls = bestCls + clsBase;
+        d.ang = ang;
         if (d.x1 - d.x0 < 0.002f || d.y1 - d.y0 < 0.002f)
+            continue;
+        // Crop-fill rejection: a deferred sess1 scans person-anchored crops and
+        // a 1-class weapons model trained on weapon-dominated frames hallucinates
+        // "gun" spanning the whole person. Real weapons occupy a modest slice of
+        // the already-expanded crop — drop boxes that fill most of it.
+        if (idx == 1 && s.rectW < 0.99f &&
+            (d.x1 - d.x0) * (d.y1 - d.y0) > 0.60f * s.rectW * s.rectH)
             continue;
         ++nRaw;
     }
@@ -730,6 +778,92 @@ void Decode(const Sess& s, int idx, const float* out, size_t elems, int64_t d1, 
     for (int i = 0; i < nRaw && g_nDets < g_cfg.maxDets; ++i)
         if (!dead[i])
             g_dets[g_nDets++] = raw[i];
+}
+
+// Runs ORT on s's already-rendered input. Detectors decode into g_dets;
+// classifiers return P(weapon) via clsProb (softmax cls-1 / sigmoid single).
+bool InferSess(Sess& s, int idx, OrtAllocator* alloc, float* clsProb) noexcept
+{
+    const OrtApi* api = ai::Api();
+    if (!SubmitInputCopy(s))
+    {
+        Log::Warn("det", "tex->buf copy failed sess=%d", idx);
+        return false;
+    }
+    api->ClearBoundOutputs(s.bind); // void
+    // Bind every declared output to CPU memory (GetBoundOutputValues returns them all).
+    size_t nOut = 0;
+    if (!ai::Ok(api->SessionGetOutputCount(s.session, &nOut), "SessionGetOutputCount"))
+        return false;
+    bool bound = true;
+    for (size_t k = 0; k < nOut; ++k)
+    {
+        char* nm = nullptr;
+        if (!ai::Ok(api->SessionGetOutputName(s.session, k, alloc, &nm), "output name") || nm == nullptr)
+        { bound = false; break; }
+        OrtStatus* st = api->BindOutputToDevice(s.bind, nm, g_cpuInfo);
+        api->AllocatorFree(alloc, nm);
+        if (!ai::Ok(st, "BindOutputToDevice"))
+        { bound = false; break; }
+    }
+    if (!bound)
+        return false;
+    if (!ai::Ok(api->RunWithBinding(s.session, nullptr, s.bind), "RunWithBinding"))
+    {
+        Fail("inference run");
+        return false;
+    }
+    if (!WaitD3D12Idle())
+        return false;
+
+    OrtValue** vals = nullptr;
+    size_t nVals = 0;
+    if (!ai::Ok(api->GetBoundOutputValues(s.bind, alloc, &vals, &nVals),
+                "GetBoundOutputValues") || vals == nullptr || nVals == 0)
+        return false;
+    const float* data = nullptr;
+    OrtTensorTypeAndShapeInfo* tsi = nullptr;
+    if (ai::Ok(api->GetTensorMutableData(vals[0], reinterpret_cast<void**>(
+               const_cast<float**>(&data))), "GetTensorMutableData") &&
+        data != nullptr &&
+        ai::Ok(api->GetTensorTypeAndShape(vals[0], &tsi), "GetTensorTypeAndShape") &&
+        tsi != nullptr)
+    {
+        int64_t dims[4] = {};
+        size_t nd = 0;
+        if (ai::Ok(api->GetDimensionsCount(tsi, &nd), "GetDimensionsCount") &&
+            ai::Ok(api->GetDimensions(tsi, dims, nd), "GetDimensions"))
+        {
+            if (s.classifier)
+            {
+                if (nd == 2 && dims[0] == 1 && dims[1] >= 1 && clsProb != nullptr)
+                {
+                    const int C = static_cast<int>(dims[1]);
+                    if (C == 1)
+                        *clsProb = 1.0f / (1.0f + expf(-data[0]));
+                    else
+                    {
+                        float mx = data[0];
+                        for (int k = 1; k < C; ++k)
+                            if (data[k] > mx) mx = data[k];
+                        float sum = 0.0f;
+                        for (int k = 0; k < C; ++k) sum += expf(data[k] - mx);
+                        *clsProb = expf(data[1] - mx) / sum; // class 1 = weapon
+                    }
+                }
+            }
+            else if (nd == 3)
+            {
+                const int64_t d1 = dims[1], d2 = dims[2];
+                Decode(s, idx, data, static_cast<size_t>(d1) * static_cast<size_t>(d2), d1, d2);
+            }
+        }
+        api->ReleaseTensorTypeAndShapeInfo(tsi);
+    }
+    for (size_t k = 0; k < nVals; ++k)
+        api->ReleaseValue(vals[k]);
+    api->AllocatorFree(alloc, vals);
+    return true;
 }
 
 } // namespace
@@ -774,13 +908,17 @@ void ParseCsvWeapons(const char* csv, bool* flags) noexcept
 void det::SetConfig(const char* model, const char* model2, float conf, int stride,
                     bool sight, float sightLen,
                     const char* classesCsv, const char* weaponsCsv,
-                    const char* classes2Csv, const char* weapons2Csv, int dump) noexcept
+                    const char* classes2Csv, const char* weapons2Csv, int dump,
+                    const char* model3, float clsConf) noexcept
 {
     AcquireSRWLockExclusive(&g_cfgLock);
     if (model != nullptr)
         strncpy_s(g_pending.model, model, _TRUNCATE);
     if (model2 != nullptr)
         strncpy_s(g_pending.model2, model2, _TRUNCATE);
+    if (model3 != nullptr)
+        strncpy_s(g_pending.model3, model3, _TRUNCATE);
+    g_pending.clsConf = clsConf < 0.50f ? 0.50f : (clsConf > 0.99f ? 0.99f : clsConf);
     g_pending.conf     = conf < 0.05f ? 0.05f : (conf > 0.95f ? 0.95f : conf);
     g_pending.stride   = stride < 1 ? 1 : (stride > 30 ? 30 : stride);
     g_pending.sight    = sight;
@@ -830,12 +968,22 @@ bool det::Ensure(ID3D11Device* dev) noexcept
     }
     // Session 0 = primary (people/COCO). Session 1 = optional secondary model
     // (e.g. weapon-trained); its failure only disables that session.
-    for (int i = 0; i < 2; ++i)
+    for (int i = 0; i < 3; ++i)
     {
-        const char* mdl = i == 0 ? g_cfg.model : g_cfg.model2;
+        const char* mdl = i == 0 ? g_cfg.model : (i == 1 ? g_cfg.model2 : g_cfg.model3);
         if (mdl[0] == 0)
             continue;
         strncpy_s(g_sess[i].model, mdl, _TRUNCATE);
+        g_sess[i].classifier = i == 2;
+        // OBB models append an angle row ([1, 4+nCls+1, N]) — sniff the
+        // filename so yolo11n-obb.onnx / det_weapons_obb.onnx decode correctly.
+        {
+            char low[260] = {};
+            int k = 0;
+            for (; mdl[k] != 0 && k < 259; ++k)
+                low[k] = static_cast<char>(tolower(static_cast<unsigned char>(mdl[k])));
+            g_sess[i].obb = strstr(low, "obb") != nullptr;
+        }
         if (CreateSession(g_sess[i], i) && CreateInterop(g_sess[i]))
             continue;
         if (i == 0)
@@ -853,9 +1001,10 @@ bool det::Ensure(ID3D11Device* dev) noexcept
         return false;
     }
     g_ready = true;
-    Log::Info("det", "detector ready: sess0=%dx%d sess1=%s stride=%d",
+    Log::Info("det", "detector ready: sess0=%dx%d sess1=%s cls=%s stride=%d",
               g_sess[0].inW, g_sess[0].inH,
-              g_sess[1].session != nullptr ? "on" : "off", g_cfg.stride);
+              g_sess[1].session != nullptr ? "on" : "off",
+              g_sess[2].session != nullptr ? "on" : "off", g_cfg.stride);
     return true;
 }
 
@@ -893,45 +1042,22 @@ void det::Run(ID3D11DeviceContext* ctx, IDXGISwapChain* sc) noexcept
     retro::BindFullscreenState(ctx);
     ctx->PSSetShader(g_psIn, nullptr, 0);
     ctx->PSSetConstantBuffers(0, 1, &g_cb);
+    // sess1 defers: after sess0 decodes, every person box gets its own zoomed
+    // weapons input in THIS pass — no lag, and enemies get scanned too.
+    const bool deferSess1 = g_sess[0].session != nullptr && g_sess[0].inRTV != nullptr &&
+                            g_sess[1].session != nullptr && g_sess[1].inRTV != nullptr;
     int live = 0;
     for (Sess& s : g_sess)
     {
-        if (s.session == nullptr || s.inRTV == nullptr)
+        if (s.session == nullptr || s.inRTV == nullptr || s.classifier)
             continue;
-        // Cascade: sess1 samples last pass's largest person box (expanded so a
-        // slung rifle stays inside). g_dets still holds the previous pass here.
-        if (&s == &g_sess[1])
-        {
-            float rx = 0.0f, ry = 0.0f, rw = 1.0f, rh = 1.0f;
-            const term::Det* bestP = nullptr;
-            float bestA = 0.0f;
-            for (int di = 0; di < g_nDets; ++di)
-            {
-                if (g_dets[di].cls != g_cfg.personClass)
-                    continue;
-                const float a = (g_dets[di].x1 - g_dets[di].x0) * (g_dets[di].y1 - g_dets[di].y0);
-                if (a > bestA) { bestA = a; bestP = &g_dets[di]; }
-            }
-            if (bestP != nullptr)
-            {
-                const float ex = (bestP->x1 - bestP->x0) * 0.30f;
-                const float ey = (bestP->y1 - bestP->y0) * 0.25f;
-                rx = bestP->x0 - ex;
-                ry = bestP->y0 - ey * 1.4f;          // extra top — slung weapons
-                rw = (bestP->x1 - bestP->x0) + ex * 2.0f;
-                rh = (bestP->y1 - bestP->y0) + ey * 2.4f;
-                if (rx < 0.0f) rx = 0.0f;
-                if (ry < 0.0f) ry = 0.0f;
-                if (rx + rw > 1.0f) rw = 1.0f - rx;
-                if (ry + rh > 1.0f) rh = 1.0f - ry;
-            }
-            s.rectX = rx; s.rectY = ry; s.rectW = rw; s.rectH = rh;
-        }
-        else { s.rectX = 0.0f; s.rectY = 0.0f; s.rectW = 1.0f; s.rectH = 1.0f; }
+        if (&s == &g_sess[1] && deferSess1)
+            continue;
+        s.rectX = 0.0f; s.rectY = 0.0f; s.rectW = 1.0f; s.rectH = 1.0f;
         const float cb[12] = { static_cast<float>(s.inW), static_cast<float>(s.inH),
-                              s.rectW * static_cast<float>(g_bbW), s.rectH * static_cast<float>(g_bbH),
+                              static_cast<float>(g_bbW), static_cast<float>(g_bbH),
                               IsSrgbFmt(g_bbFmt) ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f,
-                              s.rectX, s.rectY, s.rectW, s.rectH };
+                              0.0f, 0.0f, 1.0f, 1.0f };
         ctx->UpdateSubresource(g_cb, 0, nullptr, cb, 0, 0);
         ctx->OMSetRenderTargets(1, &s.inRTV, nullptr);
         const D3D11_VIEWPORT avp = { 0.0f, 0.0f, static_cast<float>(s.inW),
@@ -1060,64 +1186,147 @@ void det::Run(ID3D11DeviceContext* ctx, IDXGISwapChain* sc) noexcept
         Sess& s = g_sess[i];
         if (s.session == nullptr)
             continue;
-        if (!SubmitInputCopy(s))
+        // Source rects per infer: sess0 is always the full frame; a deferred
+        // sess1 instead scans each person box decoded THIS pass (max 3),
+        // expanded so slung weapons stay inside — full frame when none.
+        float rects[3][4] = { { 0.0f, 0.0f, 1.0f, 1.0f }, { 0,0,0,0 }, { 0,0,0,0 } };
+        int nRect = 1;
+        if (i == 1 && deferSess1)
         {
-            Log::Warn("det", "tex->buf copy failed sess=%d", i);
-            continue;
+            nRect = 0;
+            for (int di = 0; di < g_nDets && nRect < 3; ++di)
+            {
+                if (g_dets[di].cls != g_cfg.personClass)
+                    continue;
+                const term::Det& p = g_dets[di];
+                // Torso-anchored crop: slung rifles span shoulder→hip diagonally
+                // and poke out sideways — wide margin, less leg/background.
+                const float pw = p.x1 - p.x0, ph = p.y1 - p.y0;
+                float rx = p.x0 - pw * 0.45f, ry = p.y0 - ph * 0.15f;
+                float rw = pw * 1.90f, rh = ph * 1.15f;
+                if (rx < 0.0f) rx = 0.0f;
+                if (ry < 0.0f) ry = 0.0f;
+                if (rx + rw > 1.0f) rw = 1.0f - rx;
+                if (ry + rh > 1.0f) rh = 1.0f - ry;
+                rects[nRect][0] = rx; rects[nRect][1] = ry;
+                rects[nRect][2] = rw; rects[nRect][3] = rh;
+                ++nRect;
+            }
+            if (nRect == 0)
+                nRect = 1; // rects[0] is the identity — full-frame fallback
         }
-        ai::Api()->ClearBoundOutputs(s.bind); // void
-        // Bind every declared output to CPU memory (GetBoundOutputValues returns them all).
-        size_t nOut = 0;
-        if (!ai::Ok(ai::Api()->SessionGetOutputCount(s.session, &nOut), "SessionGetOutputCount"))
-            continue;
-        bool bound = true;
-        for (size_t k = 0; k < nOut; ++k)
+        retro::StateBlock saved2;
+        if (i == 1 && deferSess1)
+            saved2.Capture(ctx); // StateBlock above already restored; grab it again
+        for (int ri = 0; ri < nRect; ++ri)
         {
-            char* nm = nullptr;
-            if (!ai::Ok(ai::Api()->SessionGetOutputName(s.session, k, alloc, &nm), "output name") || nm == nullptr)
-            { bound = false; break; }
-            OrtStatus* st = ai::Api()->BindOutputToDevice(s.bind, nm, g_cpuInfo);
-            ai::Api()->AllocatorFree(alloc, nm);
-            if (!ai::Ok(st, "BindOutputToDevice"))
-            { bound = false; break; }
+        s.rectX = rects[ri][0]; s.rectY = rects[ri][1];
+        s.rectW = rects[ri][2]; s.rectH = rects[ri][3];
+        if (i == 1 && deferSess1)
+        {
+            // Render this crop into sess1's planar input right now.
+            ctx->PSSetShaderResources(0, 1, &g_copySRV);
+            ctx->PSSetSamplers(0, 1, &g_linear);
+            retro::BindFullscreenState(ctx);
+            ctx->PSSetShader(g_psIn, nullptr, 0);
+            ctx->PSSetConstantBuffers(0, 1, &g_cb);
+            const float cb[12] = { static_cast<float>(s.inW), static_cast<float>(s.inH),
+                                   s.rectW * static_cast<float>(g_bbW), s.rectH * static_cast<float>(g_bbH),
+                                   IsSrgbFmt(g_bbFmt) ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f,
+                                   s.rectX, s.rectY, s.rectW, s.rectH };
+            ctx->UpdateSubresource(g_cb, 0, nullptr, cb, 0, 0);
+            ctx->OMSetRenderTargets(1, &s.inRTV, nullptr);
+            const D3D11_VIEWPORT avp = { 0.0f, 0.0f, static_cast<float>(s.inW),
+                                         static_cast<float>(s.inH) * 3.0f, 0.0f, 1.0f };
+            ctx->RSSetViewports(1, &avp);
+            ctx->Draw(3, 0);
+            if (!WaitD3D11Idle(ctx))
+                break;
         }
-        if (!bound)
-            continue;
-        if (!ai::Ok(ai::Api()->RunWithBinding(s.session, nullptr, s.bind), "RunWithBinding"))
-        {
-            Fail("inference run");
+        InferSess(s, i, alloc, nullptr);
+        if (g_failed)
             return;
         }
-        if (!WaitD3D12Idle())
-            continue;
-
-        OrtValue** vals = nullptr;
-        size_t nVals = 0;
-        if (!ai::Ok(ai::Api()->GetBoundOutputValues(s.bind, alloc, &vals, &nVals),
-                    "GetBoundOutputValues") || vals == nullptr || nVals == 0)
-            continue;
-        const float* data = nullptr;
-        int64_t d1 = 0, d2 = 0;
-        OrtTensorTypeAndShapeInfo* tsi = nullptr;
-        if (ai::Ok(ai::Api()->GetTensorMutableData(vals[0], reinterpret_cast<void**>(
-                   const_cast<float**>(&data))), "GetTensorMutableData") &&
-            data != nullptr &&
-            ai::Ok(ai::Api()->GetTensorTypeAndShape(vals[0], &tsi), "GetTensorTypeAndShape") &&
-            tsi != nullptr)
+        if (i == 1 && deferSess1)
+            saved2.Restore(ctx);
+    }
+    // Cross-crop dedup: overlapping person crops can report the same weapon
+    // twice — same class + IoU > 0.6 collapses to the first (score-ordered) hit.
+    int wDet = 0;
+    for (int a = 0; a < g_nDets; ++a)
+    {
+        bool dup = false;
+        for (int b = 0; b < a; ++b)
         {
-            int64_t dims[4] = {};
-            size_t nd = 0;
-            if (ai::Ok(ai::Api()->GetDimensionsCount(tsi, &nd), "GetDimensionsCount") && nd == 3 &&
-                ai::Ok(ai::Api()->GetDimensions(tsi, dims, nd), "GetDimensions"))
-            {
-                d1 = dims[1]; d2 = dims[2];
-                Decode(s, i, data, static_cast<size_t>(d1) * static_cast<size_t>(d2), d1, d2);
-            }
-            ai::Api()->ReleaseTensorTypeAndShapeInfo(tsi);
+            const term::Det& x = g_dets[a];
+            const term::Det& y = g_dets[b];
+            if (x.cls != y.cls)
+                continue;
+            const float ix0 = x.x0 > y.x0 ? x.x0 : y.x0, iy0 = x.y0 > y.y0 ? x.y0 : y.y0;
+            const float ix1 = x.x1 < y.x1 ? x.x1 : y.x1, iy1 = x.y1 < y.y1 ? x.y1 : y.y1;
+            if (ix1 <= ix0 || iy1 <= iy0)
+                continue;
+            const float inter = (ix1 - ix0) * (iy1 - iy0);
+            const float uni = (x.x1 - x.x0) * (x.y1 - y.y0) + (y.x1 - y.x0) * (y.y1 - y.y0) - inter;
+            // Weapon-class boxes from different person crops of the same gun
+            // diverge more than sess0 NMS survivors — merge at a lower IoU so
+            // one gun can't stack duplicate brackets. Person boxes keep 0.6.
+            const float dupIou = x.cls >= kSess1Base ? 0.3f : 0.6f;
+            if (uni > 0.0f && inter / uni > dupIou) { dup = true; break; }
         }
-        for (size_t k = 0; k < nVals; ++k)
-            ai::Api()->ReleaseValue(vals[k]);
-        ai::Api()->AllocatorFree(alloc, vals);
+        if (!dup)
+            g_dets[wDet++] = g_dets[a];
+    }
+    g_nDets = wDet;
+
+    // Stage-2 micro-classifier gate (sess2, optional): each surviving weapon
+    // candidate is cropped from the raw frame and scored P(weapon|crop);
+    // below DetClsConf it never reaches the tracker.
+    if (g_sess[2].session != nullptr && g_sess[2].inRTV != nullptr && g_nDets > 0)
+    {
+        Sess& cs = g_sess[2];
+        retro::StateBlock saved3;
+        saved3.Capture(ctx);
+        int wCls = 0;
+        for (int a = 0; a < g_nDets; ++a)
+        {
+            const term::Det d = g_dets[a];
+            if (!IsWeaponCls(d.cls)) { g_dets[wCls++] = d; continue; }
+            const float mx = (d.x1 - d.x0) * 0.25f, my = (d.y1 - d.y0) * 0.25f;
+            float rx = d.x0 - mx, ry = d.y0 - my;
+            float rw = (d.x1 - d.x0) + mx * 2.0f, rh = (d.y1 - d.y0) + my * 2.0f;
+            if (rx < 0.0f) rx = 0.0f;
+            if (ry < 0.0f) ry = 0.0f;
+            if (rx + rw > 1.0f) rw = 1.0f - rx;
+            if (ry + rh > 1.0f) rh = 1.0f - ry;
+            cs.rectX = rx; cs.rectY = ry; cs.rectW = rw; cs.rectH = rh;
+            ctx->PSSetShaderResources(0, 1, &g_copySRV);
+            ctx->PSSetSamplers(0, 1, &g_linear);
+            retro::BindFullscreenState(ctx);
+            ctx->PSSetShader(g_psIn, nullptr, 0);
+            ctx->PSSetConstantBuffers(0, 1, &g_cb);
+            const float cb[12] = { static_cast<float>(cs.inW), static_cast<float>(cs.inH),
+                                   cs.rectW * static_cast<float>(g_bbW), cs.rectH * static_cast<float>(g_bbH),
+                                   IsSrgbFmt(g_bbFmt) ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f,
+                                   cs.rectX, cs.rectY, cs.rectW, cs.rectH };
+            ctx->UpdateSubresource(g_cb, 0, nullptr, cb, 0, 0);
+            ctx->OMSetRenderTargets(1, &cs.inRTV, nullptr);
+            const D3D11_VIEWPORT avp = { 0.0f, 0.0f, static_cast<float>(cs.inW),
+                                         static_cast<float>(cs.inH) * 3.0f, 0.0f, 1.0f };
+            ctx->RSSetViewports(1, &avp);
+            ctx->Draw(3, 0);
+            if (!WaitD3D11Idle(ctx))
+            { g_dets[wCls++] = d; break; }   // can't classify — keep it
+            float p = -1.0f;
+            InferSess(cs, 2, alloc, &p);
+            if (g_failed) { saved3.Restore(ctx); return; }
+            if (p >= g_cfg.clsConf || p < 0.0f)
+                g_dets[wCls++] = d;
+            else
+                Log::Info("det", "cls rejected %s P=%.2f", Label(d.cls), p);
+        }
+        saved3.Restore(ctx);
+        g_nDets = wCls;
     }
     QueryPerformanceCounter(&qt1);
     g_runMs = static_cast<float>(static_cast<double>(qt1.QuadPart - qt0.QuadPart) * 1000.0 /
@@ -1153,19 +1362,34 @@ void det::Run(ID3D11DeviceContext* ctx, IDXGISwapChain* sc) noexcept
 const term::Track* det::Update(float dt, int maxTargets, int* count) noexcept
 {
     g_trk.Update(g_dets, g_nDets, dt, maxTargets);
-    if (count != nullptr)
-        *count = g_trk.Count();
 
-    // Labels parallel to the track list.
-    const term::Track* tr = g_trk.Tracks();
+    // Temporal confirm gate: a track must match a detection on >=2 passes
+    // before it is shown — single-pass flashes never draw a bracket.
+    static term::Track s_view[term::Tracker::kMax];
+    const term::Track* all = g_trk.Tracks();
+    int nv = 0;
     for (int i = 0; i < g_trk.Count(); ++i)
+    {
+        // Flicker gate: false-positive weapon hits come and go and rarely
+        // confirm past a few passes; real weapons persist. Persons confirm
+        // at the usual 2.
+        const int need = IsWeaponCls(all[i].cls) ? 4 : 2;
+        if (all[i].hits >= need)
+            s_view[nv++] = all[i];
+    }
+    const term::Track* tr = s_view;
+    if (count != nullptr)
+        *count = nv;
+
+    // Labels parallel to the (filtered) track list.
+    for (int i = 0; i < nv; ++i)
         g_labels[i] = tr[i].cls >= 0 ? Label(tr[i].cls) : nullptr;
 
     // Sight lines: weapon track -> owning person (containing box, else nearest).
     g_nSight = 0;
     if (g_cfg.sight)
     {
-        for (int i = 0; i < g_trk.Count() && g_nSight < 32; ++i)
+        for (int i = 0; i < nv && g_nSight < 32; ++i)
         {
             const term::Track& wT = tr[i];
             if (!IsWeaponCls(wT.cls))
@@ -1173,7 +1397,7 @@ const term::Track* det::Update(float dt, int maxTargets, int* count) noexcept
             const float wcx = (wT.x0 + wT.x1) * 0.5f, wcy = (wT.y0 + wT.y1) * 0.5f;
             const term::Track* owner = nullptr;
             float bestD = 1e9f;
-            for (int j = 0; j < g_trk.Count(); ++j)
+            for (int j = 0; j < nv; ++j)
             {
                 if (tr[j].cls != g_cfg.personClass || j == i)
                     continue;
