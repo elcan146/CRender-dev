@@ -1,0 +1,72 @@
+{
+  "Mode": "Ascii",
+  "Hotkeys": {
+    "CyclePalette": "F8",
+    "CycleMode": "F9",
+    "PanicUnhook": "F10",
+    "ReloadConfig": "F11"
+  },
+  "Output": {
+    "Type": "GpuAscii",
+    "ConsoleHz": 30,
+    "ConsoleWidth": 120,
+    "ConsoleHeight": 40
+  },
+  "PixelPx": 4,
+  "CellPx": 8,
+  "Crt": 0.12,
+  "Vignette": 0.35,
+  "Palette": "color",
+  "DumpMesh": 0,
+  "WireDraws": 4,
+  "WireCull": 1,
+  "RenderScale": 4,
+  "PatchScreenCB": 0,
+  "SkipShadows": 1,
+  "PassDump": 0,
+  "GpuBurn": 0,
+  "SkipPS": [],
+  "AiModel": "terminator_vision.onnx",
+  "AiWidth": 640,
+  "AiHeight": 360,
+  "AiTemporal": 0,
+  "AiBlend": 0.5,
+  "AiStride": 1,
+  "AiDevice": 0,
+  "TermBase": true,
+  "TermBaseOnnx": false,
+  "TermHud": true,
+  "TermHudText": true,
+  "TermBrackets": true,
+  "TermReticle": true,
+  "TermHudSpeed": 1.0,
+  "TermLens": true,
+  "HudMaxTargets": 6,
+  "TermEdgeGain": 1.0,
+  "TermTint": [1.0, 0.0, 0.0],
+  "TerminatorLens": {
+    "Crt": 0.10,
+    "Vignette": 0.45,
+    "Scanlines": 0.35
+  },
+  "DetModel": "yolov8n.onnx",
+  "DetModel2": "det_weapons.onnx",
+  "DetConf": 0.35,
+  "DetStride": 2,
+  "DetClasses": "person",
+  "DetWeapon": "",
+  "DetClasses2": "0,1",
+  "DetWeapon2": "0,1",
+  "DetSight": true,
+  "DetSightLen": 0.55,
+  "DetDump": 0,
+  "Geometry": {
+    "MaxCacheMB": 256,
+    "MaxBufferBytes": 33554432,
+    "StagingDelayFrames": 3
+  },
+  "ShaderStrip": {
+    "SkipMaxIndexCount": 6,
+    "SkipOrthographic": true
+  }
+}

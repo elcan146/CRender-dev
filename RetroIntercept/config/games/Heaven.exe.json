@@ -1,0 +1,51 @@
+{
+  "GameName": "Heaven.exe",
+  "Notes": "Unigine Heaven Benchmark 4.0. Launcher exe is PE32; engine is Unigine_x86.dll. D3D11 loaded via LoadLibrary at runtime (no static import) — proxy d3d11.dll sits in bin/ next to Heaven.exe.",
+  "Architecture": "x86",
+  "ProxyDll": "d3d11.dll",
+  "EngineModule": "Unigine_x86.dll",
+  "DeviceCreation": {
+    "Function": "D3D11CreateDevice",
+    "DriverType": "UNKNOWN(0) with explicit IDXGIAdapter",
+    "Flags": "D3D11_CREATE_DEVICE_SINGLETHREADED(0x1)",
+    "SwapChainCreatedBy": "IDXGIFactory::CreateSwapChain (NOT D3D11CreateDeviceAndSwapChain) — hook factory vtable in Phase 3 via device->QueryInterface(IDXGIDevice)->GetAdapter->GetParent(IDXGIFactory)"
+  },
+  "MatrixSlot": 0,
+  "MatrixOffset": 0,
+  "Transpose": false,
+  "ReverseZ": false,
+  "Recon": {
+    "Method": "in-proxy CB dump via hkUpdateSubresource + hkVSSetConstantBuffers (Heaven uses UpdateSubresource for CBs, not Map)",
+    "ProjectionCB": "144-byte CB bound at VS slot 0; float[0..15] = perspective proj m00=0.9743 m11=1.7321(f=sqrt3) m22=-1 m23=-1 m32=-0.3 (zn=0.3, far~inf, RH D3D row-major); tail read as NaN (packed/partially-unwritten tail)",
+    "UICB": "64-byte CB also at VS slot 0 during GUI pass; ortho 2/1280=0.0016, -2/720=-0.0028 — SkipDrawIf.orthographic heuristic must look at matrix contents, not slot alone",
+    "VertexLayouts": [
+      "num=3 stride=32: POSITION f32x3 @0, TEXCOORD0 f32x4 @12, COLOR0 u8x4n @28",
+      "num=4 stride=64: POSITION f32x3 @0, TEXCOORD0-2 f32x4 @16/32/48 (likely full mesh: pos + packed normal/tangent/uv)",
+      "num=6 stride=48: POSITION f32x2 @0, TEXCOORD0-4 f16x4 @8..40 (packed/UI)",
+      "num=2 stride=16: POSITION f32x3 @0, TEXCOORD0 u8x4n @12"
+    ]
+  },
+  "AOBSignature": null,
+  "SkipDrawIf": { "maxIndexCount": 6, "orthographic": true },
+  "Geometry": { "maxCacheMB": 256 },
+  "Perf": {
+    "Note": "Values here are documentation; the proxy only reads retro.json next to d3d11.dll.",
+    "RenderScale": 4,
+    "RenderScaleNote": "works since the proxy shrinks the swap-chain backbuffer itself (real buffer 320x180, believed 1280x720, stretched at present) — keeps Unigine's texel-Load() post chain consistent. Earlier RT-only scaling blacked the screen.",
+    "SkipShadows": 1,
+    "SkipMaxIndexCount": 6,
+    "SkipOrthographic": true,
+    "SkipPS": []
+  },
+  "Neural": {
+    "Note": "Mode \"Neural\" — ORT 1.22.1 DirectML EP (last NuGet with win-x86) + DirectML 1.15.4. onnxruntime.dll/DirectML.dll/retro_ai*.onnx deployed to bin/. Needs x86 VC++ runtime (SysWOW64).",
+    "AiModel": "retro_ai.onnx",
+    "AiWidth": 320,
+    "AiHeight": 180,
+    "AiWidthHeightNote": "RenderScale 4 on 1280x720 -> real backbuffer 320x180 = model input [1,3,180,320]",
+    "AiTemporal": 0,
+    "AiTemporalNote": "1 = lerp with previous output (AiBlend); 2 = AiModel must be the two-input retro_ai_temporal.onnx",
+    "AiBlend": 0.5,
+    "AiStride": 1
+  }
+}
