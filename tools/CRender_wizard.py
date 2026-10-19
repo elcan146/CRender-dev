@@ -160,7 +160,7 @@ class Window(QMainWindow):
         self.mode.setCurrentText("RetroFX")
         self.scale = QSpinBox()
         self.scale.setRange(1, 8)
-        self.scale.setValue(4)
+        self.scale.setValue(1)
         self.scale.setSuffix("x  (1 = native res)")
         self.scale.valueChanged.connect(self.sync_pixel)
         self.pixel = QSpinBox()
@@ -304,18 +304,22 @@ class Window(QMainWindow):
         cfg["SkipShadows"] = 1 if self.skip_shadows.isChecked() else 0
         cfg["PatchScreenCB"] = 1 if self.patch_cb.isChecked() else 0
         cfg["TermHud"] = 1 if self.term_fx.isChecked() else 0
-        cfg["TermLens"] = 1 if self.term_fx.isChecked() else 0
+        # TermLens stays at the template default (off) — no fisheye/CRT filter.
+        # Clean HUD — matches the desktop overlay: no reticle, no side text,
+        # no sight lines, GUN-only weapon session (no knife).
+        cfg["TermHudText"] = 0
+        cfg["TermReticle"] = 0
+        cfg["DetSight"] = False
+        cfg["DetClasses2"] = "0"
+        cfg["DetWeapon2"] = "0"
+        # Weapon session: best.onnx (1-class 'gun') scanned on person crops.
+        # In-game scores sit at 0.15-0.45 raw, so keep the low conf floor —
+        # the DLL's crop-fill/flicker/dedup gates do the FP filtering.
+        # Inert when the ONNX files aren't deployed.
+        cfg["DetModel2"] = "best.onnx"
+        cfg["DetConf"] = 0.15
         if cfg["Mode"] == "Terminator":
             cfg["AiModel"] = "terminator_vision.onnx"
-            # Weapon session: best.onnx (1-class 'gun') scanned on person crops.
-            # In-game scores sit at 0.15-0.45 raw, so keep the low conf floor —
-            # the DLL's crop-fill/flicker/dedup gates do the FP filtering.
-            # Inert when the ONNX files aren't deployed.
-            cfg["DetModel2"] = "best.onnx"
-            cfg["DetClasses2"] = "0"
-            cfg["DetWeapon2"] = "0"
-            cfg["DetConf"] = 0.15
-            cfg["DetSight"] = False   # no weapon->owner sight lines
             cfg["DetDump"] = 0
         return (json.dumps(cfg, indent=2) + "\n").encode()
 
