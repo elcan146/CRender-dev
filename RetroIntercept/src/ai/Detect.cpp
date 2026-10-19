@@ -727,7 +727,11 @@ void Decode(const Sess& s, int idx, const float* out, size_t elems, int64_t d1, 
         term::Det& d = raw[nRaw];
         d.x0 = Clamp01(u0); d.y0 = Clamp01(v0);
         d.x1 = Clamp01(u1); d.y1 = Clamp01(v1);
-        d.score = best;
+        // Calibration remap for the weapons session: this 1-class model sits at
+        // 0.15-0.45 on domain-shifted in-game shots even on real guns. sqrt lifts
+        // the mid range (0.30->0.55, 0.45->0.67, 0.75->0.87). The conf gate above
+        // already compared the RAW score, so thresholds and FP gates are unchanged.
+        d.score = idx == 1 ? sqrtf(best) : best;
         d.cls = bestCls + clsBase;
         d.ang = ang;
         if (d.x1 - d.x0 < 0.002f || d.y1 - d.y0 < 0.002f)
