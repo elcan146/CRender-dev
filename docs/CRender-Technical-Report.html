@@ -1,0 +1,820 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>CRender — Technical Report</title>
+<style>
+  @page { size: A4; margin: 20mm 18mm 18mm 18mm; }
+  * { box-sizing: border-box; }
+  html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  body {
+    font-family: "Cambria", "Georgia", serif;
+    font-size: 10.5pt; line-height: 1.42; color: #1a1a1a;
+    margin: 0; padding: 0;
+  }
+  /* ---------- cover ---------- */
+  .cover { page-break-after: always; }
+  .cover-band {
+    background: linear-gradient(135deg, #141821 0%, #1d2430 55%, #2a1418 100%);
+    color: #fff; padding: 30px 38px 26px 38px; border-radius: 4px;
+    margin-top: 4mm;
+  }
+  .cover-band .kicker {
+    font-family: "Consolas", monospace; font-size: 9.5pt; letter-spacing: 3px;
+    color: #ff5a4e; text-transform: uppercase; margin-bottom: 10px;
+  }
+  .cover-band h1 { font-size: 26pt; margin: 0 0 5px 0; line-height: 1.12; font-weight: 600; }
+  .cover-band .sub { font-size: 11.5pt; color: #c8d0dc; margin-top: 8px; line-height: 1.45; }
+  .cover-meta { margin-top: 14px; font-family: "Consolas", monospace; font-size: 8.5pt; color: #93a0b4; }
+  .abstract {
+    margin-top: 6mm; padding: 0 4mm;
+  }
+  .abstract h2, .keywords { font-size: 10.5pt; }
+  .abstract p { text-align: justify; }
+  .kw { font-family: "Consolas", monospace; font-size: 8.5pt; color: #444; margin-top: 6px; }
+  .meta-table { width: 100%; border-collapse: collapse; margin-top: 6mm; font-size: 9.5pt; }
+  .meta-table td { border-top: 1px solid #ccc; padding: 4px 8px; vertical-align: top; }
+  .meta-table td:first-child { width: 34%; font-weight: bold; color: #333; font-family: "Consolas", monospace; font-size: 8.5pt; }
+  /* ---------- headings ---------- */
+  h2.sec {
+    font-size: 14pt; border-bottom: 2px solid #8c1f28; padding-bottom: 3px;
+    margin: 22px 0 8px 0; page-break-after: avoid; color: #141821;
+  }
+  h3 { font-size: 11.5pt; margin: 14px 0 4px 0; page-break-after: avoid; color: #26303e; }
+  h4 { font-size: 10.5pt; margin: 10px 0 3px 0; page-break-after: avoid; font-style: italic; }
+  p { margin: 5px 0; text-align: justify; widows: 2; orphans: 2; }
+  ul, ol { margin: 4px 0 6px 0; padding-left: 20px; }
+  li { margin: 2px 0; }
+  code, .mono { font-family: "Consolas", monospace; font-size: 8.8pt; background: #f3f4f6; padding: 0 2px; border-radius: 2px; }
+  pre.code {
+    font-family: "Consolas", monospace; font-size: 8.2pt; line-height: 1.35;
+    background: #f6f7f9; border: 1px solid #d8dde4; border-left: 3px solid #8c1f28;
+    padding: 8px 10px; border-radius: 3px; overflow-x: auto;
+    white-space: pre;
+  }
+  .fig {
+    margin: 10px 0; padding: 10px 12px; border: 1px solid #d0d5dd; border-radius: 4px;
+    background: #fbfcfd;
+  }
+  .fig pre { font-family: "Consolas", monospace; font-size: 7.8pt; line-height: 1.3; margin: 0; }
+  .figcap { font-size: 8.5pt; color: #555; margin-top: 7px; font-style: italic; }
+  table.tbl { width: 100%; border-collapse: collapse; margin: 8px 0; font-size: 9pt;
+    page-break-inside: avoid; }
+  table.tbl th {
+    background: #232a36; color: #fff; text-align: left; padding: 4px 7px;
+    font-family: "Consolas", monospace; font-size: 8pt; font-weight: 600;
+  }
+  table.tbl td { border-bottom: 1px solid #dfe3e8; padding: 3px 7px; vertical-align: top; }
+  table.tbl tr:nth-child(even) td { background: #f7f8fa; }
+  table.tbl td code { background: transparent; }
+  .note {
+    border-left: 3px solid #b8860b; background: #fdf7e6; padding: 6px 10px;
+    margin: 8px 0; font-size: 9.5pt; page-break-inside: avoid;
+  }
+  .finding {
+    border: 1px solid #c9d4e0; border-left: 4px solid #24466e; background: #f4f7fb;
+    padding: 8px 12px; margin: 8px 0; page-break-inside: avoid;
+  }
+  .finding .ftitle { font-weight: bold; font-family: "Consolas", monospace; font-size: 8.5pt; color: #24466e; text-transform: uppercase; letter-spacing: 0.5px; }
+  .toc { page-break-after: always; }
+  .toc h2 { font-size: 15pt; border-bottom: 2px solid #8c1f28; padding-bottom: 4px; }
+  .toc ol { list-style: none; padding-left: 0; font-size: 10.5pt; }
+  .toc > ol > li { margin: 5px 0; font-weight: 600; }
+  .toc ol ol { padding-left: 22px; font-weight: normal; font-size: 9.8pt; }
+  .toc ol ol li { margin: 2.5px 0; }
+  .secnum { color: #8c1f28; font-family: "Consolas", monospace; font-size: 0.85em; padding-right: 6px; }
+  .small { font-size: 8.8pt; color: #555; }
+  .pagebreak { page-break-before: always; }
+</style>
+</head>
+<body>
+
+<!-- ==================== COVER ==================== -->
+<div class="cover">
+  <div class="cover-band">
+    <div class="kicker">Engineering Report &nbsp;·&nbsp; Rendering Interception &nbsp;·&nbsp; GPU-Neural Post-Processing</div>
+    <h1>CRender</h1>
+    <div class="sub">
+      A Direct3D&#8202;11 proxy-DLL framework that intercepts a game's rendering pipeline and
+      re-synthesizes presented frames in retro styles — GPU ASCII/CRT shaders, CPU console
+      wireframe, and a three-layer "Terminator Vision" pipeline backed by ONNX&nbsp;Runtime
+      on DirectML with zero-copy D3D11↔D3D12 buffer interop.
+    </div>
+    <div class="cover-meta">
+      Repository: F:\CRender &nbsp;·&nbsp; Revision: git 62a49cb (main) &nbsp;·&nbsp; Report date: 2026-10-19<br>
+      Primary target: Unigine Heaven Benchmark 4.0 (x86 / D3D11) &nbsp;·&nbsp; Build: MSVC, C++20, /MT
+    </div>
+  </div>
+
+  <div class="abstract">
+    <h2>Abstract</h2>
+    <p>
+      CRender is a drop-in <code>d3d11.dll</code> proxy for offline Direct3D&#8202;11 applications.
+      Loaded through the standard DLL search order, it forwards 49 of d3d11's 51 exports through
+      architecture-specific trampolines, wraps the two device-creation entry points, and installs
+      MinHook vtable detours across <code>ID3D11Device</code>, <code>ID3D11DeviceContext</code>,
+      <code>IDXGIFactory(2)</code>, and <code>IDXGISwapChain(1,3)</code>. Inside the
+      <code>Present</code> detour the framework applies a family of frame-restyling passes
+      (pixel-art "RetroFX", a generated-glyph ASCII renderer, a Sobel/ONNX "Terminator" base,
+      HUD and CRT lens layers) and — uniquely — it can force the game itself to render at
+      1/N resolution by rewriting swap-chain, texture, viewport and scissor state while
+      preserving the game's believed screen size, so texel-space post pipelines remain correct.
+      A dual-session YOLOv8 detector running on ONNX Runtime's DirectML EP feeds a lightweight
+      IoU/centroid tracker that drives HUD target brackets; a pure-CPU mesh-AABB scanner acts as
+      a zero-dependency fallback. The binary carries a static CRT and a KERNEL32-only import
+      table; all optional components (ONNX Runtime, DirectML, D3D12) are resolved with
+      <code>LoadLibrary</code> at runtime. This report documents the architecture, the
+      interception and scaling machinery, the AI interop path, the tooling ecosystem, and the
+      empirical findings collected while adapting the proxy to real engines.
+    </p>
+    <div class="kw">Keywords — D3D11, DXGI, DLL proxying, vtable hooking, MinHook, ONNX Runtime, DirectML, D3D12 interop, post-processing, ASCII rendering, object detection, YOLOv8</div>
+
+    <table class="meta-table">
+      <tr><td>Artifact</td><td><code>d3d11.dll</code> (x86 + x64) — 51 exports, correct ordinals 1–51</td></tr>
+      <tr><td>Import surface</td><td>KERNEL32 + psapi only (static CRT <code>/MT</code>); ORT/DirectML/D3D12/d3dcompiler resolved at runtime</td></tr>
+      <tr><td>Modes</td><td>Off · NullPS · FlatPS · Wireframe · RetroFX · Ascii · ConsoleWire · Terminator</td></tr>
+      <tr><td>AI stack</td><td>ONNX Runtime 1.22.1 (DirectML EP) + DirectML 1.15.4; last NuGet release shipping win-x86</td></tr>
+      <tr><td>Scope</td><td>Offline/single-player titles only; graphics-layer interception (ReShade/DXVK category); no game-state writes, no anti-cheat interaction</td></tr>
+    </table>
+  </div>
+</div>
+
+<!-- ==================== TOC ==================== -->
+<div class="toc">
+<h2>Contents</h2>
+<ol>
+  <li><span class="secnum">1</span>Introduction</li>
+  <li><span class="secnum">2</span>Design goals and constraints</li>
+  <li><span class="secnum">3</span>System architecture</li>
+  <li><span class="secnum">4</span>The proxy layer
+    <ol><li>Export surface and ordinals</li><li>Forwarding trampolines (x86 / x64)</li><li>Lazy resolution of the real d3d11</li></ol></li>
+  <li><span class="secnum">5</span>Interception layer
+    <ol><li>Vtable hooking strategy</li><li>Hooked call surface</li><li>Object lifetime safety</li><li>Multi-device engines</li></ol></li>
+  <li><span class="secnum">6</span>Render modes</li>
+  <li><span class="secnum">7</span>Present-time post-processing
+    <ol><li>RetroFX shader</li><li>Ascii shader and the glyph atlas</li><li>Terminator base (HLSL/ONNX parity)</li><li>Terminator lens</li></ol></li>
+  <li><span class="secnum">8</span>RenderScale — low-resolution render injection</li>
+  <li><span class="secnum">9</span>Neural pipeline — ONNX Runtime / DirectML interop</li>
+  <li><span class="secnum">10</span>Detection, tracking and HUD
+    <ol><li>Dual-session YOLOv8 detector</li><li>Weapon→owner sight lines</li><li>Tracker</li><li>Mesh-AABB fallback scanner</li><li>HUD renderer</li></ol></li>
+  <li><span class="secnum">11</span>Supporting infrastructure</li>
+  <li><span class="secnum">12</span>Build system, deployment and tooling</li>
+  <li><span class="secnum">13</span>Findings and lessons from real engines</li>
+  <li><span class="secnum">14</span>Limitations</li>
+  <li><span class="secnum">15</span>Safety, legal and ethical scope</li>
+  <li><span class="secnum">16</span>Conclusion</li>
+  <li><span class="secnum">A</span>Appendix A — retro.json reference</li>
+  <li><span class="secnum">B</span>Appendix B — hooked vtable indices</li>
+  <li><span class="secnum">C</span>Appendix C — source map</li>
+  <li><span class="secnum">D</span>Appendix D — ONNX model graphs</li>
+</ol>
+</div>
+
+<!-- ==================== 1 ==================== -->
+<h2 class="sec"><span class="secnum">1</span>Introduction</h2>
+<p>
+CRender intercepts a Windows game's Direct3D&#8202;11 pipeline at the graphics-API boundary and
+re-presents every frame through a stylization stage. It belongs to the same category of tools as
+ReShade or DXVK — injection at the graphics layer, below the game logic — but pursues a different
+goal: rather than subtle color grading or API translation, it synthesizes <em>visibly alternate
+representations</em> of the frame: a phosphor-terminal ASCII rendering, a pixel-art CRT look, a
+CPU-rasterized wireframe in a console window, and a "Terminator Vision" mode in which an ONNX
+network running on the GPU restyles the frame while a second network detects objects and a HUD
+draws target brackets over them.
+</p>
+<p>
+The project is engineered as a <b>drop-in proxy DLL</b>: a file named <code>d3d11.dll</code> placed
+next to the game executable is loaded by the normal Windows DLL search order — either as a static
+import or, as in the primary test target, through an explicit runtime <code>LoadLibrary</code>.
+No patching of the game binary, no driver installation, and no per-game recompilation are
+required; configuration lives in a single <code>retro.json</code> file beside the DLL.
+</p>
+<p>
+This report documents the complete system as implemented at revision <code>62a49cb</code>: the
+forwarding machinery, the hook surface, every render path, the resolution-injection subsystem,
+the neural inference interop, the supporting tools, and the operational findings that emerged
+from running the proxy inside Unigine Heaven and probing it against several AAA engines'
+behaviors (multi-device engines, engine crash reporters, flip-model swap chains).
+</p>
+
+<!-- ==================== 2 ==================== -->
+<h2 class="sec"><span class="secnum">2</span>Design goals and constraints</h2>
+<table class="tbl">
+<tr><th style="width:26%">Goal</th><th>Consequence in the implementation</th></tr>
+<tr><td><b>Drop-in deployment</b></td><td>Named <code>d3d11.dll</code>; all 51 exports present with the correct ordinals so both import-by-name and import-by-ordinal loaders work.</td></tr>
+<tr><td><b>Zero hard dependencies</b></td><td>Static CRT (<code>/MT</code>); import table is KERNEL32 + psapi only. ONNX Runtime, DirectML, D3D12 and d3dcompiler are <code>LoadLibrary</code>'d on demand — a bare proxy still runs every non-neural mode.</td></tr>
+<tr><td><b>Survive hostile runtimes</b></td><td>Vectored exception handler for crash forensics, deferred COM release queue, owning (AddRef'd) captures, per-swap-chain device resolution, F10 panic unhook.</td></tr>
+<tr><td><b>x86 and x64 from one source</b></td><td>x86 uses <code>__declspec(naked)</code> inline-asm trampolines; x64 (no <code>__asm</code> in MSVC) generates equivalent MASM stubs at CMake time from the same <code>FwdList.inc</code>.</td></tr>
+<tr><td><b>Offline-only scope</b></td><td>Read-only observation of GPU traffic plus post-processing of the presented frame; no writes to game state, no input synthesis (input injection is documented as unreliable: <code>SendInput</code> is blocked in tested titles, <code>keybd_event</code> works).</td></tr>
+<tr><td><b>Observable failure</b></td><td>Rotating log (<code>CRender.log</code>, 4&#8202;MB cap → <code>CRender.1.log</code>), 2&#8202;s stats line, linker <code>/MAP</code> so crash RVAs resolve without PDBs, per-component failure latches that degrade gracefully (ONNX → HLSL fallback).</td></tr>
+</table>
+
+<!-- ==================== 3 ==================== -->
+<h2 class="sec"><span class="secnum">3</span>System architecture</h2>
+<div class="fig">
+<pre>
+  Heaven.exe / game                    CRender d3d11.dll (in-process)                 system d3d11.dll
+ ┌──────────────┐   LoadLibrary   ┌────────────────────────────────────────────┐   ┌───────────────┐
+ │ engine code  │───────────────▶ │ 51 exports: 49 jmp-stubs ──────────────────┼──▶│ real exports  │
+ │              │                 │              2 wrapped create fns           │   └───────┬───────┘
+ │              │                 │                   │                         │           │
+ │              │                 │     OnDeviceCreated → MinHook vtable hooks  │◀──────────┘
+ │              │                 │     ┌─────────────────────────────────────┐ │
+ │              │  device calls   │     │ ID3D11DeviceContext  draws/CB/Map/…  │ │
+ │              │───────────────▶ │────▶│ ID3D11Device         Create*         │ │──▶ pass-through + observe
+ │              │                 │     │ IDXGIFactory(2)      CreateSwapChain │ │     + mutate (RenderScale)
+ │              │                 │     │ IDXGISwapChain(1,3)  Present/GetBuf  │ │
+ │              │                 │     └──────────┬──────────────────────────┘ │
+ │              │                 │   hkPresent → TerminatorBase / RetroPass / │
+ │              │                 │   ConsoleWire → HUD → lens → UpscaleBlit    │
+ │              │                 │        │                                    │
+ │              │                 │   ┌────┴─────┐  LoadLibrary   ┌───────────┐ │
+ │              │                 │   │ ai:: /   │───────────────▶│ onnxruntime│ │
+ │              │                 │   │ det::ORT │   D3D12/DML    │ DirectML.dll│ │
+ │              │                 │   └──────────┘   shared bufs  └───────────┘ │
+ │              │                 │   wire:: → AllocConsole grid               │
+ └──────────────┘                 │   dllmain: init thread, VEH, hotkey ticker │
+                                  └────────────────────────────────────────────┘
+</pre>
+<div class="figcap">Figure 1 — Process view. Everything inside the box lives in one DLL loaded by the game; the ONNX/DirectML stack is optional and dynamically bound.</div>
+</div>
+<p>
+The codebase is layered. <code>src/proxy/</code> owns the export surface and resolves the real
+system DLL. <code>src/d3d11/</code> owns interception (<code>HookManager</code>), the
+post-process shaders (<code>RetroPass</code>), the console wireframe path
+(<code>ConsoleWire</code>), the geometry fallback scanner (<code>Targets</code>) and a shared
+pipeline-state snapshot type (<code>StateBlock</code>). <code>src/ai/</code> contains the two
+ORT-backed passes — <code>AiPass</code> (style base) and <code>Detect</code> (object detection)
+— plus <code>OrtApi</code>, the runtime binding shim. <code>src/term/</code> holds the HUD
+renderer and the track smoother. <code>src/core/</code> provides logging and the minimal JSON
+reader. A single entry point, <code>dllmain.cpp</code>, spawns a worker thread that performs all
+initialization outside loader lock and then acts as a 50&#8202;ms hotkey/statistics ticker.
+</p>
+
+<!-- ==================== 4 ==================== -->
+<h2 class="sec"><span class="secnum">4</span>The proxy layer</h2>
+
+<h3>4.1 Export surface and ordinals</h3>
+<p>
+The Windows SysWOW64/System32 <code>d3d11.dll</code> exports 51 functions. CRender reproduces the
+surface exactly: 49 pass-through exports enumerated in <code>src/proxy/FwdList.inc</code> (the
+source of truth is <code>tools/d3d11_exports_syswow64.txt</code>) and two wrapped creation
+functions, <code>D3D11CreateDevice</code> and <code>D3D11CreateDeviceAndSwapChain</code>.
+<code>exports.def</code> pins each export to its real ordinal (1–51); games that link by ordinal —
+or that call undocumented <code>D3DKMT*</code> entries — continue to work.
+</p>
+<p>
+Two alternative designs were rejected: <code>.def</code>-file forwarders (<code>X=d3d11.X</code>)
+resolve to the proxy itself because the module is named <code>d3d11.dll</code>, producing infinite
+recursion; and shipping a renamed copy of the system DLL redistributes a version-locked Microsoft
+binary. Instead, each forwarded export is a tail-jump through a pointer slot
+(<code>g_fwd_&lt;Name&gt;</code>) resolved at runtime from the real DLL located by an absolute
+system path.
+</p>
+
+<h3>4.2 Forwarding trampolines (x86 / x64)</h3>
+<p>
+On x86 each export is a signature-free naked function; preserving the stdcall stack is automatic
+because the stub never touches arguments:
+</p>
+<pre class="code">#define FWD_STUB(Name)                                    \
+  extern "C" __declspec(naked) void Name()                \
+  {                                                     \
+    __asm cmp dword ptr [g_fwd_##Name], 0                 \
+    __asm jne short go_##Name                             \
+    __asm call EnsureRealD3D11Impl   /* lazy resolve */   \
+    __asm go_##Name:                                      \
+    __asm jmp dword ptr [g_fwd_##Name] /* tail jump */    \
+  }</pre>
+<p>
+MSVC has no <code>__asm</code> on x64, so <code>CMakeLists.txt</code> parses the same
+<code>FwdList.inc</code> and emits <code>fwd_stubs_x64.asm</code> — 49 MASM stubs. Because the lazy
+resolver may run inside an arbitrary call, the x64 stub preserves the integer argument registers
+(rcx/rdx/r8/r9) and vector argument registers (xmm0–3, via <code>movdqu</code> into a
+0x68-byte home region) around the resolver call before the unconditional
+<code>jmp [g_fwd_Name]</code>.
+</p>
+
+<h3>4.3 Lazy resolution of the real d3d11</h3>
+<p>
+<code>EnsurerealD3D11Impl</code> implements a four-state interlocked state machine
+(0&nbsp;not-started → 1&nbsp;loading → 2&nbsp;ready / 3&nbsp;failed; contenders spin on
+<code>SwitchToThread</code>). It is called eagerly from the proxy init thread so the game's first
+<code>D3D11CreateDevice</code> never pays the load cost, and defensively from any stub that is hit
+first. Resolution uses <code>GetSystemDirectoryW()</code> + <code>\d3d11.dll</code> — under WOW64
+this correctly returns <code>SysWOW64</code>, so a 32-bit proxy always loads the 32-bit system DLL.
+The two wrapped exports additionally log arguments and capture the returned
+device/context/swap-chain for the hook layer.
+</p>
+
+<!-- ==================== 5 ==================== -->
+<h2 class="sec"><span class="secnum">5</span>Interception layer</h2>
+
+<h3>5.1 Vtable hooking strategy</h3>
+<p>
+All interception is implemented with MinHook inline detours on <em>virtual-table slots</em>: the
+hook target is <code>*object -&gt; vtbl -&gt; entry[index]</code>. Because every instance of a COM
+implementation class shares one vtable, a single detour covers all contexts, devices or swap chains
+of that implementation — there is no per-object patching and no vtable rewriting. Indices are the
+published SDK layouts (a verified list is given in Appendix&nbsp;B); the one discovered empirically
+is <code>DrawAuto</code> at context slot&nbsp;38.
+</p>
+<p>
+Swap chains created through <code>D3D11CreateDeviceAndSwapChain</code> are captured in the wrapped
+export. Engines that instead call <code>IDXGIFactory::CreateSwapChain</code> directly — Heaven does
+— are caught by walking <code>device → IDXGIDevice → IDXGIAdapter → IDXGIFactory(2)</code> inside
+<code>OnDeviceCreated</code> and hooking <code>CreateSwapChain</code>/<code>CreateSwapChainForHwnd</code>.
+</p>
+
+<h3>5.2 Hooked call surface</h3>
+<p>
+The installed hooks fall into four functional groups: <b>counters/provenance</b>
+(<code>Map</code>, <code>Unmap</code>, <code>IASet*</code>, <code>PSSetShaderResources</code>),
+<b>state tracking</b> (<code>VSSetConstantBuffers</code>, <code>UpdateSubresource</code>,
+<code>RSSetState/Viewports/ScissorRects</code>, <code>OMSetRenderTargets(+UAVs)</code>,
+<code>PSSetShader</code>), <b>draw interception</b> (<code>Draw</code>, <code>DrawIndexed</code>,
+<code>Draw(Indexed)Instanced</code>, <code>DrawAuto</code> — where skip decisions, mesh readback and
+target-scan fan-out happen), and <b>creation/present</b> (device <code>Create*</code> methods for
+buffer AABB capture, PS bytecode hashing and texture shrinking; factory swap-chain creation;
+swap-chain <code>Present</code>/<code>Present1</code>, <code>GetBuffer</code>,
+<code>ResizeBuffers(1)</code>). Roughly thirty slots are detoured in total.
+</p>
+
+<h3>5.3 Object lifetime safety</h3>
+<p>
+Releasing a COM interface inside <code>OnDeviceCreated</code> runs its destructor on the game's
+<code>D3D11CreateDevice</code> call stack — Yakuza&#8202;0 faulted inside dxgi when a second
+(BGRA/D2D) device displaced the first. The fix is a 16-slot <em>deferred release queue</em>:
+superseded captures are parked and drained from <code>hkPresent</code>/<code>Shutdown</code>, on a
+safe call stack. A full queue deliberately leaks rather than releasing in place. Captures are
+<em>owning</em> (AddRef'd) and a probe device (created without an immediate context for capability
+queries and released immediately) never displaces a live context-bearing capture.
+</p>
+
+<h3>5.4 Multi-device engines</h3>
+<p>
+Some engines (observed: Watch&#8202;Dogs&#8202;2) create multiple devices — probe/loading devices
+alongside the real one. <code>PresentCommon</code> therefore never trusts the captured globals for
+rendering work: it calls <code>sc-&gt;GetDevice()</code>/<code>GetImmediateContext()</code> on the
+presenting chain and runs all retro passes on that pair, releasing both references afterward.
+</p>
+
+<!-- ==================== 6 ==================== -->
+<h2 class="sec"><span class="secnum">6</span>Render modes</h2>
+<table class="tbl">
+<tr><th style="width:17%">Mode</th><th>Mechanism</th><th style="width:22%">Where it runs</th></tr>
+<tr><td><code>Off</code></td><td>All detours pass through; only counters/stats remain.</td><td>—</td></tr>
+<tr><td><code>NullPS</code></td><td><code>PSSetShader(nullptr)</code> — geometry and depth still render; diagnostic mode.</td><td>per-draw, in <code>hkPSSetShader</code></td></tr>
+<tr><td><code>FlatPS</code></td><td>A compiled constant-color pixel shader substitutes every game PS.</td><td>per-draw</td></tr>
+<tr><td><code>Wireframe</code></td><td><code>RSSetState</code> swaps in a wireframe rasterizer state.</td><td>per-draw</td></tr>
+<tr><td><code>RetroFX</code></td><td>Fullscreen post: pixelate + 4×4 Bayer ordered dither + 3-bit palette + scanlines + CRT barrel + vignette.</td><td><code>hkPresent</code></td></tr>
+<tr><td><code>Ascii</code></td><td>Cell-grid post: 4-tap luminance → generated 10-glyph density atlas; five phosphor palettes.</td><td><code>hkPresent</code></td></tr>
+<tr><td><code>ConsoleWire</code></td><td>Budgeted VB/IB readback → CPU projection (world·view·proj) → Bresenham edges with slope-matched <code>─│╲╱</code> chars and depth fade into an <code>AllocConsole</code> window at <code>ConsoleHz</code>.</td><td>draw-time collect + present-time raster</td></tr>
+<tr><td><code>Terminator</code></td><td>Three layers: ONNX (ORT DirectML) or HLSL Sobel base → instanced-glyph HUD (text, reticle, target brackets, sight lines) → CRT lens. Config alias <code>"Neural"</code> maps here.</td><td><code>hkPresent</code></td></tr>
+</table>
+<p>
+F9 cycles the user-facing subset <code>Off → RetroFX → Ascii → Terminator</code>; the debug modes
+remain reachable via the config <code>"Mode"</code> key. <code>retro::StateBlock</code> snapshots and
+restores every pipeline slot the present-time passes touch (shaders + class instances, SRVs,
+samplers, CBs, RT/DS, blend/depth/rasterizer, viewports), so a frame ends bit-identical to how the
+game left it.
+</p>
+
+<!-- ==================== 7 ==================== -->
+<h2 class="sec"><span class="secnum">7</span>Present-time post-processing</h2>
+<p>
+All fullscreen effects share one <code>SV_VertexID</code> triangle vertex shader and a 48-byte
+parameter cbuffer carrying the drawn-region size, letterbox offset, and effect tunables. Effects
+run at <em>output</em> resolution sampling the (possibly shrunken) scene texture — so ASCII glyphs
+and scanlines stay crisp when <code>RenderScale</code> is active.
+</p>
+
+<h3>7.1 RetroFX</h3>
+<p>
+<code>kPsRetroSrc</code>: NDC-space barrel distortion <code>uv' = uv·(1 + crt·r²)</code>, block
+quantization to <code>pixelPx</code> cells, a 4×4 Bayer ordered-dither matrix feeding a
+<code>floor(c·7+t)/7</code> 3-bit-per-channel palette, a per-block sine scanline (fine 2-px
+fallback when <code>pixelPx &lt; 3</code>), and a smoothstep vignette.
+</p>
+
+<h3>7.2 Ascii shader and glyph atlas</h3>
+<p>
+<code>kPsAsciiSrc</code> divides the output into <code>CellPx</code>-sized cells, takes a 4-tap
+luminance sample per cell, lifts darks (<code>pow(lum,0.7)·1.1</code>) so the whole ramp is used,
+and selects one of ten density glyphs — the bitmap ramp
+<code>' ' '.' ':' '-' '=' '+' '*' '#' '%' '@'</code> generated procedurally into an R8 atlas at
+startup (exact texel fetch via <code>atlas.Load</code>, no sampler bleed). Palettes:
+<b>green</b>, <b>amber</b>, <b>mono</b>, <b>cyan</b>, and <b>color</b> (divides the scene color by
+its own luminance to recover hue+saturation). A faint <code>bg = phosphor·lum·0.07</code> fill
+preserves silhouettes between glyph strokes. The same atlas' second half holds 5×7 text glyphs
+shared by the HUD.
+</p>
+
+<h3>7.3 Terminator base — ONNX/HLSL parity</h3>
+<p>
+The HLSL fallback (<code>kPsTermBaseSrc</code>) replicates the bundled
+<code>terminator_vision.onnx</code> model exactly: luma → 3×3 Sobel with an explicit zeroed
+1-px border (ONNX <code>Pad</code> modes weren't in the op budget, so the model multiplies by a
+constant mask instead) → magnitude <code>√(gx²+gy²+ε)</code> → soft threshold
+<code>sat(e·2−0.05)</code> scaled by <code>TermEdgeGain</code> → output encoding
+<code>R = 0.525·Y·tint + e</code>, <code>G = B = 0.7·e</code> — the crimson-void/white-outline look.
+Because the ONNX and shader paths compute identical math, <code>TermEdgeGain</code>/<code>TermTint</code>
+re-grade whichever base is active.
+</p>
+
+<h3>7.4 Terminator lens</h3>
+<p>
+<code>kPsLensSrc</code>: the same CRT barrel, a 3-px-period cosine scanline
+(<code>0.5+0.5·cos(y·2π/3)</code>), and a red-biased vignette
+(<code>RGB × (1−0.55v, 1−v, 1−v)</code>) that sinks corners to deep red rather than black.
+</p>
+
+<!-- ==================== 8 ==================== -->
+<h2 class="sec"><span class="secnum">8</span>RenderScale — low-resolution render injection</h2>
+<p>
+Restyling alone leaves the game shading every native pixel. <code>RenderScale N</code> makes the
+game <em>itself</em> render at 1/N while believing the screen is still native — a genuine
+performance lever, not just an aesthetic. The mechanism is a consistent fiction maintained across
+five subsystems:
+</p>
+<ul>
+<li><b>Swap chain</b> — <code>hkCreateSwapChain</code>/<code>hkCreateSCForHwnd</code> rewrite
+<code>BufferDesc</code> to believed/N and set <code>STRETCHED</code> scaling. The real backbuffer is
+small; DXGI stretches it at present. Shrinking the <em>backbuffer itself</em> (rather than only
+intermediate RTs) is the load-bearing decision: engines like Unigine post-process with texel-space
+<code>Load()</code>, which stays consistent only if the backbuffer actually is low-res. The earlier
+RT-only variant rendered black.</li>
+<li><b>Textures</b> — <code>hkCreateTexture2D</code> shrinks RT/DS-bindable textures that are
+screen-sized <em>or a proportional divisor of it</em> (½/¼-res bloom passes scale too), while
+shared/GDI/cube/uploaded textures are contract-sized and left alone; mip counts are clamped to the
+shrunken maximum; failed shrinks retry at native size and log. A 1024-slot open-addressed table
+(<code>FindScaled/SetScaled</code>) records each resource's believed dims.</li>
+<li><b>Viewports &amp; scissors</b> — <code>hkRSSetViewports</code>/<code>ScissorRects</code> and
+<code>NoteBoundTargets</code> re-push the game's state divided by N whenever a scaled target is
+bound.</li>
+<li><b>Copies</b> — <code>hkCopySubresourceRegion</code> remaps dst offsets and src boxes into
+whichever side's space is scaled.</li>
+<li><b>Present</b> — for blit-model chains a second, windowed native-size chain
+(<code>EnsurePresentChain</code>) point-samples the small buffer upward as true integer scaling and
+presents <em>it</em> instead — bypassing DXGI's bilinear stretch; failure latches off and falls
+back to the game's own Present without surfacing an error. For <em>flip-model</em> chains the
+backbuffer can't be shrunk, so <code>hkGetBuffer</code> substitutes a small proxy texture the game
+renders into, which is then upscaled. In exclusive fullscreen the extra chain is never presented
+(DXGI would fight over the output).</li>
+</ul>
+<p>
+Companion instrumentation: <code>SkipShadows</code> drops depth-only passes onto non-screen DSVs;
+<code>SkipPS</code> blocklists pixel shaders by a bytecode hash recorded at
+<code>CreatePixelShader</code> (<code>PassDump</code> discovers hashes by logging
+<code>ps=%016llx rt=WxH</code> per pass); <code>ShaderStrip.SkipMaxIndexCount</code>/<code>SkipOrthographic</code>
+drop fullscreen/Ortho-UI quads; <code>GpuBurn N</code> adds N synthetic heavy fullscreen passes to
+emulate a weaker GPU for benchmarking; <code>PatchScreenCB</code> rewrites screen-dim floats in CB
+uploads for engines whose SSAO/deferred passes misbehave. Guards (<code>g_inRetroPass</code>,
+<code>g_inSCCreate</code>) keep the proxy's own draws and DXGI-internal creations out of the
+scaling/skip logic. RenderScale must be configured <em>before</em> device creation (launch-time
+only — the scale is latched on first device).
+</p>
+
+<!-- ==================== 9 ==================== -->
+<h2 class="sec"><span class="secnum">9</span>Neural pipeline — ONNX Runtime / DirectML interop</h2>
+<p>
+<code>src/ai/AiPass.cpp</code> runs the Terminator base style network entirely on the GPU with
+<b>zero CPU copies</b>. <code>onnxruntime.dll</code>/<code>DirectML.dll</code> are
+<code>LoadLibrary</code>'d from the proxy directory (ORT&#8202;1.22.1 DirectML EP — the last NuGet
+shipping win-x86 — plus DirectML&#8202;1.15.4), resolved through <code>OrtApi.cpp</code>; nothing
+links statically, preserving the KERNEL32-only import table.
+</p>
+<ul>
+<li><b>Interop buffers</b> — three linear fp32 buffers (input, plus a ping-pong output pair) are
+created as <em>shared D3D12 committed resources</em> on the game's adapter and opened on the D3D11
+device. D3D11 writes the NCHW-planar input through a UAV pixel pass and reads the output via SRV;
+ORT binds the identical memory with <code>CreateGPUAllocationFromD3DResource</code>.</li>
+<li><b>Synchronization</b> — a D3D11 event query drains the D3D11 queue before
+<code>Run()</code>; a D3D12 fence wait after Run orders DML's work against the next D3D11 pass.</li>
+<li><b>Model contract</b> — fixed-shape <code>[1,3,AiH,AiW]</code> fp32 NCHW (dynamic shapes
+rejected); <code>AiWidth % 64 == 0</code> for D3D12 texture-copy row alignment. Any inference
+failure latches the ONNX path off until F11; the HLSL base takes over seamlessly.</li>
+<li><b>Temporal modes</b> — <code>AiTemporal</code> 0: single-input; 1:
+<code>lerp(current, prevOut, AiBlend)</code> using the ping-pong buffers; 2: two-input models
+(<code>retro_ai_temporal.onnx</code>) with the previous output bound as input&#8202;1.</li>
+<li><b>Placement in frame</b> — runs inside <code>TerminatorBase</code> on the (possibly shrunken)
+game backbuffer, after the detector has sampled the <em>raw</em> frame and before HUD/lens/upscale.</li>
+</ul>
+<p>
+Model tooling produces all shipped networks with DirectML-friendly ops only (Conv, Mul, Add, Sqrt,
+Clip, Concat — no control flow, no dynamic axes): <code>retro_ai.onnx</code> (7.7&#8202;KB
+pixel-art: blockify→saturate→contrast→posterize), <code>terminator_vision.onnx</code> (the Sobel
+encoding of §7.3), <code>yolov8n.onnx</code> and the weapon-tuned <code>best.onnx</code>/
+<code>det_weapons.onnx</code> (≈12&#8202;MB YOLOv8 class detectors). Any fp32 NCHW
+<code>[1,3,H,W]</code> style-transfer ONNX can be dropped in as <code>retro_ai.onnx</code>.
+</p>
+
+<!-- ==================== 10 ==================== -->
+<h2 class="sec"><span class="secnum">10</span>Detection, tracking and HUD</h2>
+
+<h3>10.1 Dual-session YOLOv8 detector</h3>
+<p>
+<code>src/ai/Detect.cpp</code> runs an <em>independent</em> D3D12/DML/ORT stack (it works even when
+the style base is the HLSL fallback) on the raw backbuffer, sampled before any restyle. Up to two
+detector sessions are supported — session&#8202;0 typically <code>yolov8n.onnx</code> (COCO classes
+by name via <code>DetClasses</code>/<code>DetWeapon</code>), session&#8202;1 a numeric-id model such
+as <code>det_weapons.onnx</code> (0=guns, 1=knife) whose ids are offset +1000 so they never collide.
+An optional third stage is a micro-classifier scoring <code>P(weapon|crop)</code> on person crops
+with its own keep-threshold (<code>DetClsConf</code>). The decoder handles YOLOv8-style
+<code>[1, 4+K, N]</code> outputs (including the OBB variant's extra angle row), maps boxes back
+through the letterbox rect, applies per-class NMS, honors <code>DetStride</code> (infer every Nth
+present), and can dump input PPMs (<code>DetDump</code>) for offline inspection.
+</p>
+
+<h3>10.2 Weapon→owner sight lines</h3>
+<p>
+<code>DetSight</code> draws dotted normalized screen-space rays from each weapon box toward its
+owner — the <code>person</code> track that contains it, else the nearest person — extended by
+<code>DetSightLen</code> beyond the weapon. Detection labels render as COCO names,
+<code>GUN</code>/<code>KNIFE</code>, or <code>DET&nbsp;nn</code>.
+</p>
+
+<h3>10.3 Tracker</h3>
+<p>
+<code>src/term/Tracker.cpp</code> is a 32-track smoother operating on normalized boxes:
+score-ordered greedy association (IoU ≥ 0.25 primary, centroid distance &lt; 0.08 fallback),
+EMA smoothing (α=0.35), coasting up to 0.35&#8202;s without matches, a 1.2&#8202;s lock-in
+threshold, and monotonic 1–99 ids for the <code>TGT&nbsp;nn</code> display. A hit counter confirms
+genuine tracks. One instance per producer thread — no locking needed.
+</p>
+
+<h3>10.4 Mesh-AABB fallback scanner</h3>
+<p>
+When no detector model exists, <code>src/d3d11/Targets.cpp</code> produces brackets with zero GPU
+readback: at <code>CreateBuffer</code> time it computes local AABBs of each vertex buffer's initial
+data for all 14 plausible strides (12–64&#8202;B, finite-checked, degenerate-extent rejection) in an
+8192-slot open-addressed table; <code>UpdateSubresource</code> writes give it the 64&#8202;B per-draw
+world CB and the 144&#8202;B camera CB (proj&#8202;@&#8202;0, view&#8202;@&#8202;64, perspective
+validated by |m<sub>11</sub>|&gt;0.5). Per scene draw, the 8 box corners are projected
+(row-vector <code>v·world·view·proj</code>), near-plane/off-screen/ortho/UI and size outliers
+(2–30&#8202;% screen area) are rejected, same-mesh duplicates collapse at IoU&#8202;&gt;&#8202;0.8,
+and the best area-scored boxes feed the same Tracker. Dynamic/late-filled buffers simply never
+produce brackets.
+</p>
+
+<h3>10.5 HUD renderer</h3>
+<p>
+<code>src/term/Hud.cpp</code> draws the overlay as <b>one instanced draw call</b> of quads from the
+shared retro glyph atlas — instances are tagged glyph/rect/ring with per-instance color, alpha
+blended onto the presenting target: scrolling diagnostic text columns (real status lines such as
+<code>AI ONNX DML</code>, <code>DET ONNX</code>, <code>TGT n</code>), a center reticle with drifting
+coordinates, and animated target brackets. Every element is gated by config
+(<code>TermHud*</code>, <code>HudMaxTargets</code>, <code>TermHudSpeed</code>).
+</p>
+
+<!-- ==================== 11 ==================== -->
+<h2 class="sec"><span class="secnum">11</span>Supporting infrastructure</h2>
+<ul>
+<li><b>Entry &amp; ticker</b> — <code>DllMain</code> does nothing but
+<code>DisableThreadLibraryCalls</code> + <code>CreateThread</code> (loader-lock discipline). The
+thread resolves the real d3d11 eagerly, loads config once, then loops at 50&#8202;ms on
+<code>HotkeyTick</code>/<code>StatsTick</code>, re-snapshotting module ranges every ~3.2&#8202;s.</li>
+<li><b>VEH crash forensics</b> — engines with their own SEH/UEF reporters swallow faults silently.
+A first-in-chain vectored handler logs hard faults only (severity 0xC…; stack overflow skipped —
+no stack left to log on), deduplicates faulting IPs, resolves module+RVA against a snapshot taken
+on the ticker thread (never inside the handler — loader-lock deadlock), and scans 128 stack slots
+for probable return addresses. The linker emits a <code>.map</code> so RVAs symbolize offline.</li>
+<li><b>Hotkeys</b> — edge-triggered <code>GetAsyncKeyState</code> with a foreground-window PID
+check: <b>F8</b> palette, <b>F9</b> mode cycle, <b>F10</b> panic (<code>MH_DisableHook(ALL)</code>
+toggle), <b>F11</b> config reload, <b>F12</b> RenderDoc capture via
+<code>RENDERDOC_GetAPI(10100)</code> when renderdoc.dll is resident.</li>
+<li><b>Config</b> — <code>retro.json</code> next to the DLL, parsed by a zero-dependency
+strstr-style scanner (<code>src/core/Config.h</code>); <code>ExtractObject</code> lifts nested
+preset blocks (<code>TerminatorLens</code>) so key names can't collide; <code>"Neural"</code> is
+accepted as an alias for Terminator. Hot-reloadable via F11 except launch-latched keys
+(<code>RenderScale</code>).</li>
+<li><b>Logging</b> — <code>CRender.log</code> beside the DLL, timestamp + TID + severity + tag,
+<code>_SH_DENYNO</code> (tail-able live), 4&#8202;MB rotation to <code>CRender.1.log</code>,
+<code>OutputDebugString</code> fallback. Stats every 2&#8202;s:
+<code>mode fps cpuFrameMs presents draws maps skipped scale aiMs aiRuns</code>.</li>
+<li><b>Shutdown</b> — orderly: ticker stopped, VEH removed,
+<code>MH_DisableHook(ALL)</code> → vtable-patch restore → <code>MH_Uninitialize</code>, then all
+retro/AI/detector/HUD/target/staging/chain objects released; skipped entirely on process
+termination (<code>reserved != NULL</code>).</li>
+</ul>
+
+<!-- ==================== 12 ==================== -->
+<h2 class="sec"><span class="secnum">12</span>Build system, deployment and tooling</h2>
+<h3>12.1 Build</h3>
+<pre class="code">cmake --preset win32-msvc          # VS 18 2026 generator, arch=Win32
+cmake --build --preset win32-release
+#  → build/win32/Release/d3d11.dll + test_cube.exe
+# x64 mirror: presets x64-msvc / x64-release → build/x64/  (generated MASM stubs)</pre>
+<p>
+C++20, <code>/W4 /WX /permissive- /utf-8</code>, static CRT. The target is named
+<code>retro_proxy</code> so its import lib can't shadow the SDK's <code>d3d11.lib</code>; the
+produced binary is still <code>d3d11.dll</code>. MinHook builds in-tree as a subdirectory. The ORT
+headers/DLLs are probed at configure time and gate <code>RETRO_HAVE_ORT</code> — without
+<code>third_party/onnxruntime</code> the DLL still compiles and Terminator logs a fallback warning.
+A POST_BUILD step deploys the DLL, <code>retro.json</code>, ORT/DirectML runtimes and ONNX models
+to <code>HEAVEN_BIN</code> when present. Two Dockerfiles containerize what's containerizable:
+<code>tools.Dockerfile</code> (Linux CPU-ORT for model tooling) and
+<code>windows-build.Dockerfile</code> (Windows Server Core + VS Build Tools, x86+x64 artifacts via
+<code>docker cp</code>); the runtime itself requires a real GPU desktop and game.
+</p>
+<h3>12.2 Tooling</h3>
+<table class="tbl">
+<tr><th style="width:30%">Tool</th><th>Purpose</th></tr>
+<tr><td><code>tools/CRender_wizard.py</code></td><td>PyQt6 GUI installer — pick a game folder, Apply deploys proxy+config+models, Rewind restores backups.</td></tr>
+<tr><td><code>tools/crenderctl.ps1</code></td><td>CLI equivalent: <code>-Enable/-Disable/-Status</code>, <code>-Neural</code> adds ORT/DML + models; tracks installs via <code>.crenderctl.json</code>.</td></tr>
+<tr><td><code>tools/screen_vision.py</code></td><td>Desktop port of the Terminator/ASCII pipeline — mss capture + PyQt6 transparent click-through HUD over the live screen (F8/F9/F10/F11/End).</td></tr>
+<tr><td><code>tools/test_cube/</code></td><td>Minimal windowed D3D11 app — rotating cube, title-bar FPS, F1 toggles a heavy/light pixel shader.</td></tr>
+<tr><td><code>tools/ai/fetch_ort.ps1</code></td><td>Walks NuGet versions newest-first to find the last ORT-DML release still shipping win-x86; pulls matching DirectML.</td></tr>
+<tr><td><code>tools/ai/make_*.py, fetch_detector.py</code></td><td>Generate <code>retro_ai(.onnx/_temporal)</code>, <code>terminator_vision.onnx</code>, export Ultralytics <code>.pt</code> → fixed-shape <code>yolov8n.onnx</code>.</td></tr>
+<tr><td><code>tools/ai/{verify_terminator,sanity_check,test_bestgun,wrap_style}.py</code></td><td>Model verification, ORT environment check, weapon-detector eval, style-model wrapping.</td></tr>
+<tr><td><code>tools/ai/render_model_graph.py</code></td><td>Renders an ONNX op-graph as a layered DAG PNG (longest-path layering + barycenter ordering); used for Appendix D.</td></tr>
+</table>
+
+<!-- ==================== 13 ==================== -->
+<h2 class="sec"><span class="secnum">13</span>Findings and lessons from real engines</h2>
+<p>
+Adapting the proxy beyond the test cube surfaced a set of non-obvious engine behaviors; each is
+encoded in the code as a guard or fallback.
+</p>
+
+<div class="finding"><div class="ftitle">F1 — Backbuffer shrink, not RT shrink</div>
+RenderScale had to shrink the <em>swap-chain backbuffer</em> (believed dims kept, STRETCH scaling).
+Shrinking only intermediate RTs blacks the screen: Unigine's HDR→LDR composite reads its sources
+with texel-space <code>Load()</code> at believed coordinates, which only matches when the final
+target actually is low-res. Engines sampling via <code>Sample()</code>+UV would have survived the
+naive version.</div>
+
+<div class="finding"><div class="ftitle">F2 — Flip-model chains can't shrink</div>
+<code>FLIP_*</code> swap effects reject shrunken backbuffers. <code>hkGetBuffer</code> instead
+returns a small proxy texture the game renders into; that texture is upscaled at present. Blit-model
+chains get the stronger path — a second windowed native-size chain presents a point-sampled integer
+upscale, bypassing DXGI bilinear stretch entirely.</div>
+
+<div class="finding"><div class="ftitle">F3 — Deferred COM release</div>
+Releasing a superseded device/context inside <code>D3D11CreateDevice</code> runs the destructor on
+the game's stack — Yakuza&#8202;0 AV'd in dxgi. All captures are AddRef'd and old ones drained from
+<code>hkPresent</code>. Probe devices (no immediate context) never displace a live capture.</div>
+
+<div class="finding"><div class="ftitle">F4 — Never trust the captured device for rendering</div>
+Multi-device engines (Watch&#8202;Dogs&#8202;2) leave the globals bound to a probe device.
+<code>PresentCommon</code> resolves device+context from the presenting swap chain itself.</div>
+
+<div class="finding"><div class="ftitle">F5 — Engine crash reporters hide faults</div>
+UEF-style reporters (Ubisoft's) swallow exceptions — no WER event, no dump, not even
+<code>DLL_PROCESS_DETACH</code>. A first-in-chain vectored handler with pre-snapshotted module
+ranges is the only reliable observer; stack-overflow faults are deliberately skipped (no stack to
+log on).</div>
+
+<div class="finding"><div class="ftitle">F6 — Heaven's contract, discovered</div>
+The launcher PE is 32-bit and the engine (<code>Unigine_x86.dll</code>) loads <code>d3d11.dll</code>
+via <code>LoadLibrary</code>; device created with <code>D3D11_CREATE_DEVICE_SINGLETHREADED</code>
+and an explicit adapter; the swap chain arrives via <code>IDXGIFactory::CreateSwapChain</code>, not
+the AndSwapChain export; constant buffers are written with <code>UpdateSubresource</code>, never
+<code>Map</code>; the camera CB is 144&#8202;B at VS slot&#8202;0 (proj&#8202;@&#8202;0:
+m<sub>00</sub>=0.9743, m<sub>11</sub>=1.7321, m<sub>22</sub>=−1, m<sub>23</sub>=−1,
+m<sub>32</sub>=−0.3 → z<sub>n</sub>=0.3, far≈∞, RH row-major) while a 64&#8202;B ortho CB shares
+the slot for UI — ortho detection must read matrix contents, not the slot. <code>DrawAuto</code>
+= vtbl&#8202;[38]. <code>SendInput</code> is blocked; <code>keybd_event</code> works.</div>
+
+<div class="finding"><div class="ftitle">F7 — ORT availability dictates architecture</div>
+ONNX Runtime's DirectML NuGet dropped win-x86 after 1.22.1 — precisely the architecture the primary
+target needs. <code>fetch_ort.ps1</code> encodes the version walk; the runtime is LoadLibrary'd so
+the proxy degrades to HLSL when DLLs are absent rather than failing to load.</div>
+
+<div class="finding"><div class="ftitle">F8 — Present is the only safe work queue</div>
+<code>DXGI_PRESENT_TEST</code> occlusion probes and nested Present/Present1 routes are excluded via
+a thread-local guard; a failed <em>self-owned</em> upscale chain is never reported to the game
+(engines treat a failed Present as device loss); second windowed chain is suppressed under
+exclusive fullscreen.</div>
+
+<div class="finding"><div class="ftitle">F9 — Export parity is load-bearing</div>
+All 51 exports with correct ordinals matter: games import D3DKMT* entries by ordinal, and the
+wrapped-vs-forwarded split (49+2) keeps every call signature-free except the two creation points
+where capture must happen.</div>
+
+<!-- ==================== 14 ==================== -->
+<h2 class="sec"><span class="secnum">14</span>Limitations</h2>
+<ul>
+<li><b>Launch-time scaling</b> — <code>RenderScale</code> is latched at first device; F11 cannot re-scale live (RTs/backbuffer are created once).</li>
+<li><b>Heuristic pass skipping</b> — shadow/ortho/index rules can misfire on unusual engines; <code>PassDump</code> + <code>SkipPS</code> are the manual escape hatch.</li>
+<li><b>AABB scan coverage</b> — only buffers with CPU initial data get brackets; dynamic/streamed geometry is invisible to the fallback.</li>
+<li><b>Fixed-shape models only</b> — dynamic axes rejected; <code>AiWidth</code> must be a multiple of 64.</li>
+<li><b>x86 ORT ceiling</b> — neural features on 32-bit games are frozen at ORT&#8202;1.22.1/DML&#8202;1.15.4.</li>
+<li><b>Single-context assumption in trackers</b> — geometry/target collection keys off the immediate context; deferred-context games get post modes but weaker brackets.</li>
+<li><b>CPU fallback cost</b> — ConsoleWire's readback path is budgeted (8-slot staging pool, per-frame draw caps) but still taxes bandwidth-heavy titles.</li>
+</ul>
+
+<!-- ==================== 15 ==================== -->
+<h2 class="sec"><span class="secnum">15</span>Safety, legal and ethical scope</h2>
+<p>
+The project targets <b>games you own, offline, with no anti-cheat</b>. It observes GPU traffic and
+rewrites the presented image; it does not read or write game state, synthesize input, or interact
+with protection systems — the same operational envelope as ReShade or DXVK. Detection features are
+presentational (brackets drawn on the output frame) and provide no feedback channel into the game.
+</p>
+
+<!-- ==================== 16 ==================== -->
+<h2 class="sec"><span class="secnum">16</span>Conclusion</h2>
+<p>
+CRender demonstrates that a self-contained, dependency-free proxy DLL can host a full
+frame-synthesis stack — shader effects, neural style transfer, and real-time detection-driven
+overlays — inside a shipping-class D3D11 engine without modification. Its most transferable
+engineering results are the believed-vs-real backbuffer scaling technique, the
+lifetime/present-queue disciplines that keep a proxy stable inside hostile engine runtimes, and
+the shared-buffer D3D11↔D3D12 interop that makes GPU inference practical from inside an injected
+11-on-12-free process. Natural extensions are richer per-game profiles under
+<code>config/games/</code>, additional bundled detectors, and D3D11On12-free zero-copy paths for
+newer ORT releases on x64.
+</p>
+
+<!-- ==================== APPENDICES ==================== -->
+<h2 class="sec"><span class="secnum">A</span>Appendix A — retro.json reference</h2>
+<table class="tbl">
+<tr><th style="width:22%">Key</th><th style="width:14%">Default (shipped)</th><th>Meaning</th></tr>
+<tr><td><code>Mode</code></td><td>"Ascii"</td><td>Off · NullPS · FlatPS · Wireframe · RetroFX · Ascii · ConsoleWire · Terminator ("Neural" = Terminator)</td></tr>
+<tr><td><code>Hotkeys.*</code></td><td>F8/F9/F10/F11</td><td>Palette / mode cycle / panic unhook / config reload</td></tr>
+<tr><td><code>Output.*</code></td><td>120×40 @30Hz</td><td>ConsoleWire grid size + blit rate</td></tr>
+<tr><td><code>PixelPx / CellPx</code></td><td>4 / 8</td><td>RetroFX block size / Ascii cell size (clamped ≥ RenderScale)</td></tr>
+<tr><td><code>Crt / Vignette</code></td><td>0.12 / 0.35</td><td>RetroFX barrel + vignette</td></tr>
+<tr><td><code>Palette</code></td><td>"color"</td><td>green · amber · mono · cyan · color</td></tr>
+<tr><td><code>DumpMesh / WireDraws / WireCull</code></td><td>0 / 4 / 1</td><td>Mesh readback budget, draws/frame, backface cull</td></tr>
+<tr><td><code>RenderScale</code></td><td>4</td><td>Scene resolution divisor (launch-time only)</td></tr>
+<tr><td><code>PatchScreenCB</code></td><td>0</td><td>Rewrite screen-dim floats in CB writes</td></tr>
+<tr><td><code>SkipShadows / SkipPS / ShaderStrip</code></td><td>1 / [] / 6+ortho</td><td>Pass skipping: shadow maps, PS hash blocklist, tiny/ortho draws</td></tr>
+<tr><td><code>PassDump / GpuBurn</code></td><td>0 / 0</td><td>Per-pass PS discovery log / synthetic GPU load passes</td></tr>
+<tr><td><code>DumpCBs</code></td><td>0</td><td>Recon: dump N small CB writes (matrix-slot hunting)</td></tr>
+<tr><td><code>AiModel / AiWidth / AiHeight</code></td><td>terminator_vision.onnx / 640 / 360</td><td>Style model + fixed input shape (width %64)</td></tr>
+<tr><td><code>AiTemporal / AiBlend / AiStride / AiDevice</code></td><td>0 / 0.5 / 1 / 0</td><td>Temporal mode, blend, frame stride, adapter pick</td></tr>
+<tr><td><code>TermBase / TermBaseOnnx</code></td><td>false/false</td><td>Enable restyle base; prefer ONNX over HLSL</td></tr>
+<tr><td><code>TermHud / TermHudText / TermBrackets / TermReticle / TermHudSpeed</code></td><td>t/f/t/f/1.0</td><td>HUD elements + animation rate</td></tr>
+<tr><td><code>TermLens / TerminatorLens{Crt,Vignette,Scanlines}</code></td><td>false / 0.1,0.45,0.35</td><td>Lens pass + preset</td></tr>
+<tr><td><code>HudMaxTargets / TermEdgeGain / TermTint</code></td><td>6 / 1.0 / [1,0,0]</td><td>Bracket cap, edge gain, void tint</td></tr>
+<tr><td><code>DetModel / DetModel2 / (+model3)</code></td><td>yolov8n.onnx / best.onnx</td><td>Detector sessions 0–2 (classifier)</td></tr>
+<tr><td><code>DetConf / DetClsConf / DetStride / DetDump</code></td><td>0.15 / 0.80 / 2 / 0</td><td>Confidence, stage-2 threshold, infer stride, PPM dumps</td></tr>
+<tr><td><code>DetClasses / DetWeapon / DetClasses2 / DetWeapon2</code></td><td>person / "" / 0 / 0</td><td>Class filters (COCO names or ids) + weapon flags</td></tr>
+<tr><td><code>DetSight / DetSightLen</code></td><td>false / 0.55</td><td>Weapon→owner rays + length</td></tr>
+<tr><td><code>Geometry.{MaxCacheMB,MaxBufferBytes,StagingDelayFrames}</code></td><td>256 / 32MB / 3</td><td>Mesh readback cache/staging budgets</td></tr>
+</table>
+
+<h2 class="sec"><span class="secnum">B</span>Appendix B — Hooked vtable indices</h2>
+<table class="tbl">
+<tr><th>Interface</th><th>Slot → Method</th></tr>
+<tr><td><code>ID3D11DeviceContext</code></td><td>7 VSSetConstantBuffers · 8 PSSetShaderResources · 9 PSSetShader · 12 DrawIndexed · 13 Draw · 14 Map · 15 Unmap · 18 IASetVertexBuffers · 19 IASetIndexBuffer · 20 DrawIndexedInstanced · 21 DrawInstanced · 33 OMSetRenderTargets · 34 OMSetRenderTargetsAndUnorderedAccessViews · 38 DrawAuto · 43 RSSetState · 44 RSSetViewports · 45 RSSetScissorRects · 46 CopySubresourceRegion · 48 UpdateSubresource</td></tr>
+<tr><td><code>ID3D11Device</code></td><td>3 CreateBuffer · 5 CreateTexture2D · 9 CreateRenderTargetView · 10 CreateDepthStencilView · 11 CreateInputLayout · 15 CreatePixelShader</td></tr>
+<tr><td><code>IDXGIFactory / 2</code></td><td>10 CreateSwapChain · 15 CreateSwapChainForHwnd</td></tr>
+<tr><td><code>IDXGISwapChain / 1 / 3</code></td><td>8 Present · 9 GetBuffer · 13 ResizeBuffers · 22 Present1 · 39 ResizeBuffers1</td></tr>
+</table>
+
+<h2 class="sec"><span class="secnum">C</span>Appendix C — Source map</h2>
+<table class="tbl">
+<tr><th style="width:34%">File</th><th>Contents</th></tr>
+<tr><td><code>src/dllmain.cpp</code></td><td>DllMain + init thread, VEH crash forensics, module snapshotter, 50&#8202;ms ticker</td></tr>
+<tr><td><code>src/proxy/{ProxyDll,ProxyExports}.cpp, FwdList.inc, exports.def</code></td><td>Real-DLL resolution state machine, 49 forwarders + 2 wrapped exports, ordinals</td></tr>
+<tr><td><code>src/d3d11/HookManager.cpp</code> (~3k lines)</td><td>All MinHook detours, RenderScale machinery, mode dispatch, config load, hotkeys, stats, present orchestration</td></tr>
+<tr><td><code>src/d3d11/RetroPass.cpp</code></td><td>Fullscreen VS + RetroFX/Ascii/TermBase/TermLens pixel shaders, glyph atlas, upscale blit, GpuBurn, StateBlock usage</td></tr>
+<tr><td><code>src/d3d11/ConsoleWire.cpp</code></td><td>Console wireframe: geometry collect, projection, Bresenham raster, console blit</td></tr>
+<tr><td><code>src/d3d11/Targets.cpp</code></td><td>VB AABB capture, world/view/proj tracking, corner projection, candidate feed</td></tr>
+<tr><td><code>src/ai/AiPass.cpp</code></td><td>ORT-DML style pass: D3D12 shared buffers, session, interop binding, sync, temporal</td></tr>
+<tr><td><code>src/ai/Detect.cpp</code></td><td>Independent ORT stack: ≤3 sessions, YOLOv8/OBB decode, NMS, sight lines, classifier</td></tr>
+<tr><td><code>src/ai/OrtApi.cpp</code></td><td>LoadLibrary binding of onnxruntime/DirectML/D3D12 entry points</td></tr>
+<tr><td><code>src/term/{Hud,Tracker}.cpp</code></td><td>Instanced-quad HUD; IoU/EMA tracker</td></tr>
+<tr><td><code>src/core/{Config.h,Log.cpp}</code></td><td>strstr JSON reader + ExtractObject; rotating logger</td></tr>
+<tr><td><code>tools/</code></td><td>Wizard GUI, crenderctl.ps1, screen_vision.py, test_cube, ai/* model tooling</td></tr>
+<tr><td><code>config/</code></td><td>retro.json, ONNX models, games/Heaven.exe.json recon profile</td></tr>
+<tr><td><code>third_party/</code></td><td>MinHook (submodule), onnxruntime (fetched), style models</td></tr>
+</table>
+
+<h2 class="sec"><span class="secnum">D</span>Appendix D — ONNX model graphs</h2>
+<p>
+Op-level DAGs of the six shipped models, rendered by <code>tools/ai/render_model_graph.py</code>
+(longest-path layering, barycenter edge-ordering; colors: blue&nbsp;=&nbsp;convolutions,
+amber&nbsp;=&nbsp;activations/clips, indigo&nbsp;=&nbsp;tensor reshaping ops, green&nbsp;=&nbsp;reductions,
+green/red terminals&nbsp;=&nbsp;graph inputs/outputs).
+</p>
+<table class="tbl">
+<tr><th>Model</th><th>Nodes</th><th>Edges</th><th>Layers</th><th>Dominant ops</th><th>Role</th></tr>
+<tr><td><code>terminator_vision.onnx</code></td><td>18</td><td>19</td><td>15</td><td>Mul×5 · Conv×3 · Add×3 · Clip×3</td><td>Terminator base style (Sobel/luma encoding)</td></tr>
+<tr><td><code>retro_ai.onnx</code></td><td>70</td><td>87</td><td>30</td><td>Mul×18 · Conv×11 · Sub/Add×8</td><td>Pixel-art placeholder style (blockify→posterize)</td></tr>
+<tr><td><code>retro_ai_temporal.onnx</code></td><td>74</td><td>91</td><td>32</td><td>Mul×20 · Conv×11 · Add×9</td><td>Two-input temporal variant of retro_ai</td></tr>
+<tr><td><code>yolov8n.onnx</code></td><td>235</td><td>322</td><td>190</td><td>Conv×64 · Sigmoid×58 · Mul×58 · Concat×17</td><td>Detector session 0 (COCO classes)</td></tr>
+<tr><td><code>det_weapons.onnx</code></td><td>263</td><td>360</td><td>197</td><td>Conv×64 · Mul×60 · Sigmoid×58 · Constant×22</td><td>Detector session 1 (weapon ids 0/1)</td></tr>
+<tr><td><code>best.onnx</code></td><td>263</td><td>360</td><td>197</td><td>same family as det_weapons</td><td>Tuned weapon detector (session 1 alternative)</td></tr>
+</table>
+
+<p>
+The full-size graphs are shipped as standalone vector files in <code>docs/images/</code>:
+</p>
+<table class="tbl">
+<tr><th style="width:34%">File</th><th>Model graph</th></tr>
+<tr><td><code>docs/images/1-terminator_vision.svg</code></td><td>Terminator base style — frame → luma Conv → border-masked Sobel Conv → magnitude → soft-threshold edges → per-channel Clip → <code>Concat(R=bg+e, G=B=0.7e)</code> → styled. Matches the HLSL fallback in §7.3 op-for-op.</td></tr>
+<tr><td><code>docs/images/2-retro_ai.svg</code></td><td>Single-input pixel-art style chain (blockify → saturate → contrast → posterize).</td></tr>
+<tr><td><code>docs/images/3-retro_ai_temporal.svg</code></td><td>retro_ai body plus the second <code>prev</code> input feeding the temporal blend.</td></tr>
+<tr><td><code>docs/images/4-yolov8n.svg</code></td><td>YOLOv8 backbone → neck concat/split fan-out → three-scale detection head.</td></tr>
+<tr><td><code>docs/images/5-det_weapons.svg</code></td><td>Same YOLOv8 family; head emits gun/knife ids consumed as session-1 classes +1000.</td></tr>
+<tr><td><code>docs/images/6-best.svg</code></td><td>Tuned weapon checkpoint, structurally identical to det_weapons.</td></tr>
+</table>
+
+<p class="small" style="margin-top:14px">Report generated from source at revision 62a49cb. All behavioral claims are grounded in the cited files; the shipped <code>retro.json</code> values are shown as defaults. Model graphs ship separately as <code>docs/images/{1..6}-*.svg</code> (also as <code>modelgraph_*.png</code>).</p>
+
+</body>
+</html>

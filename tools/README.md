@@ -25,6 +25,7 @@
 | `sanity_check.py` | Quick ORT/model environment check |
 | `test_bestgun.py` | Evaluates `best.onnx` (gun detector) against test images |
 | `wrap_style.py` | Wraps a style-transfer ONNX for the expected `[1,3,H,W]` contract |
+| `render_model_graph.py` | Renders an ONNX op graph as a Netron-style PNG+SVG (folded initializers, measured text fit) |
 | `testimg/` | Sample inputs + outputs for detector/model tests |
 
 `yolov8n.pt` is the default checkpoint `fetch_detector.py` consumes; a copy of the

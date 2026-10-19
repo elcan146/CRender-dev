@@ -10,7 +10,10 @@ retro style: **GPU ASCII shader pass** (primary) and/or **CPU console wireframe*
 
 ## Status
 
-**Phase 11 complete** — presentation layer: Unicode line-art wireframe, phosphor palettes, on-demand RenderDoc key.
+**Phase 12+** — performance pass (`RenderScale`, skip rules, `GpuBurn`) landed on top of the
+full presentation layer; Terminator stack runs ONNX models on ORT-DML with an HLSL fallback.
+Technical report: [`docs/CRender-Technical-Report.pdf`](docs/CRender-Technical-Report.pdf)
+(HTML source + numbered ONNX graph SVGs under `docs/images/`).
 
 | Piece | State |
 |---|---|
@@ -102,6 +105,7 @@ See [`tools/README.md`](tools/README.md). Quick start:
 python tools/CRender_wizard.py    # GUI installer — pick a game folder, Apply, Rewind to undo
 .\tools\crenderctl.ps1 -Path "<game dir>" -Enable   # CLI equivalent
 python tools/screen_vision.py     # desktop preview of the Terminator/ASCII pipeline
+python tools/ai/render_model_graph.py --all config docs/images   # Netron-style model graphs (PNG+SVG)
 ```
 
 ## Layout
@@ -113,7 +117,7 @@ src/d3d11/    hooks, render passes, state tracking
 src/ai/       ONNX Runtime / DirectML inference
 src/term/     HUD + target tracker
 config/       retro.json, ONNX models, per-game configs
-docs/         agent prompt, internals notes, sample images
+docs/         technical report (HTML+PDF), ONNX model graphs (1-…6-*.svg), internals notes, images
 tools/        installer GUI/CLI, AI helpers, test_cube
 third_party/  MinHook, ONNX Runtime, style models
 ```
