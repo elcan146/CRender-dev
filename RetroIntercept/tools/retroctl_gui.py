@@ -41,6 +41,7 @@ NEURAL_MODELS = [
     (ROOT / "config" / "terminator_vision.onnx", "terminator_vision.onnx"),
     (ROOT / "config" / "yolov8n.onnx", "yolov8n.onnx"),
     (ROOT / "config" / "det_weapons.onnx", "det_weapons.onnx"),
+    (ROOT / "config" / "best.onnx", "best.onnx"),  # BecayeSoft gun detector (1 class)
 ]
 
 def neural_files(arch: str) -> list[tuple[Path, str]]:
@@ -298,6 +299,16 @@ class Window(QMainWindow):
         cfg["TermLens"] = 1 if self.term_fx.isChecked() else 0
         if cfg["Mode"] == "Terminator":
             cfg["AiModel"] = "terminator_vision.onnx"
+            # Weapon session: best.onnx (1-class 'gun') scanned on person crops.
+            # In-game scores sit at 0.15-0.45 raw, so keep the low conf floor —
+            # the DLL's crop-fill/flicker/dedup gates do the FP filtering.
+            # Inert when the ONNX files aren't deployed.
+            cfg["DetModel2"] = "best.onnx"
+            cfg["DetClasses2"] = "0"
+            cfg["DetWeapon2"] = "0"
+            cfg["DetConf"] = 0.15
+            cfg["DetSight"] = False   # no weapon->owner sight lines
+            cfg["DetDump"] = 0
         return (json.dumps(cfg, indent=2) + "\n").encode()
 
     def apply(self) -> None:
