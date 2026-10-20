@@ -3,11 +3,16 @@
 namespace
 {
 
-constexpr float kIouMatch   = 0.25f; // primary association
-constexpr float kDistMatch  = 0.08f; // fallback: centroid distance (normalized)
-constexpr float kEma        = 0.35f; // weight of the new detection
-constexpr float kCoast      = 0.35f; // seconds a track survives without detections
-constexpr float kLockAfter  = 1.2f;  // seconds tracked before "LOCK"
+float g_iouMatch  = 0.25f; // primary association
+float g_distMatch = 0.08f; // fallback: centroid distance (normalized)
+float g_ema       = 0.35f; // weight of the new detection
+float g_coast     = 0.35f; // seconds a track survives without detections
+float g_lockAfter = 1.2f;  // seconds tracked before "LOCK"
+
+float Clamp(float v, float lo, float hi) noexcept
+{
+    return v < lo ? lo : (v > hi ? hi : v);
+}
 
 float Iou(const term::Det& a, const term::Track& b) noexcept
 {
@@ -54,20 +59,23 @@ void term::Tracker::Update(const Det* dets, int n, float dt, int maxTracks) noex
     {
         const Det& d = dets[order[oi]];
         int best = -1;
-        float bestIou = kIouMatch;
+        float bestIou = g_iouMatch;
         for (int t = 0; t < m_n; ++t)
         {
-            if (trackUsed[t])
+            // Same-cls only: sess-1 classes (kSess1Base+) share geometry with
+            // sess-0 boxes, so an overlapping gun det would steal a person
+            // track and flip tr.cls every frame without this gate.
+            if (trackUsed[t] || m_tracks[t].cls != d.cls)
                 continue;
             const float iou = Iou(d, m_tracks[t]);
             if (iou > bestIou) { bestIou = iou; best = t; }
         }
         if (best < 0)
         {
-            float bestD = kDistMatch * kDistMatch;
+            float bestD = g_distMatch * g_distMatch;
             for (int t = 0; t < m_n; ++t)
             {
-                if (trackUsed[t])
+                if (trackUsed[t] || m_tracks[t].cls != d.cls)
                     continue;
                 const float d2 = Dist2(d, m_tracks[t]);
                 if (d2 < bestD) { bestD = d2; best = t; }
@@ -76,8 +84,8 @@ void term::Tracker::Update(const Det* dets, int n, float dt, int maxTracks) noex
         if (best >= 0)
         {
             Track& tr = m_tracks[best];
-            tr.x0 += (d.x0 - tr.x0) * kEma; tr.y0 += (d.y0 - tr.y0) * kEma;
-            tr.x1 += (d.x1 - tr.x1) * kEma; tr.y1 += (d.y1 - tr.y1) * kEma;
+            tr.x0 += (d.x0 - tr.x0) * g_ema; tr.y0 += (d.y0 - tr.y0) * g_ema;
+            tr.x1 += (d.x1 - tr.x1) * g_ema; tr.y1 += (d.y1 - tr.y1) * g_ema;
             tr.unseen = 0.0f;
             tr.cls = d.cls;
             tr.score = d.score;
@@ -103,15 +111,24 @@ void term::Tracker::Update(const Det* dets, int n, float dt, int maxTracks) noex
         tr.age += dt;
         if (!trackUsed[t])
             tr.unseen += dt;
-        if (!tr.locked && tr.age >= kLockAfter)
+        if (!tr.locked && tr.age >= g_lockAfter)
         {
             tr.locked = true;
             tr.lockAge = 0.0f;
         }
         else if (tr.locked)
             tr.lockAge += dt;
-        if (tr.unseen <= kCoast && w < maxTracks)
+        if (tr.unseen <= g_coast && w < maxTracks)
             m_tracks[w++] = tr;
     }
     m_n = w;
+}
+
+void term::SetTuning(const Tuning& t) noexcept
+{
+    g_iouMatch  = Clamp(t.iouMatch,  0.05f, 0.95f);
+    g_distMatch = Clamp(t.distMatch, 0.01f, 0.50f);
+    g_ema       = Clamp(t.ema,       0.05f, 1.00f);
+    g_coast     = Clamp(t.coast,     0.0f,  2.00f);
+    g_lockAfter = Clamp(t.lockAfter, 0.0f, 30.0f);
 }

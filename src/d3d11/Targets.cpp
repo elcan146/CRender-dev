@@ -41,6 +41,7 @@ bool          g_camValid = false;
 term::Det     g_cand[kMaxCand] = {};
 int           g_candN = 0;
 term::Tracker g_tracker;
+bool          g_muted = false; // scene gate: feed the tracker nothing
 
 size_t Home(const void* p, size_t mask) noexcept
 {
@@ -275,11 +276,16 @@ void targets::OnDraw(ID3D11Buffer* vb, UINT stride, UINT vbOffset, ID3D11Buffer*
 
 const term::Track* targets::EndFrame(float dt, int maxTargets, int* count) noexcept
 {
-    g_tracker.Update(g_cand, g_candN, dt, maxTargets);
+    g_tracker.Update(g_muted ? nullptr : g_cand, g_muted ? 0 : g_candN, dt, maxTargets);
     g_candN = 0;
     if (count != nullptr)
         *count = g_tracker.Count();
     return g_tracker.Tracks();
+}
+
+void targets::SetMuted(bool muted) noexcept
+{
+    g_muted = muted;
 }
 
 void targets::Reset() noexcept

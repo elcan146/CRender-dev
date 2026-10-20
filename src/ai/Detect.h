@@ -22,8 +22,11 @@ struct Config
 {
     char  model[260]  = "yolov8n.onnx";     // session 0 — "" disables detection
     char  model2[260] = "";                 // session 1 (optional, e.g. weapon-trained)
-    char  model3[260] = "";                 // session 2 (optional micro-classifier, P(weapon|crop))
+    char  model3[260] = "";                 // session 2 (optional): [1,C] classifier, or a second
+                                            // weapon detector run as a second-opinion crop check
     float conf      = 0.35f;                // DetConf
+    float conf2     = -1.0f;                // DetConf2 — session-1 floor; <0 falls back to conf
+    float sameObjIou = 0.55f;               // DetSameObjIoU — weapon box mostly == person box ⇒ relabel FP (0=off)
     float clsConf   = 0.80f;                // DetClsConf — stage-2 keep threshold
     int   stride    = 2;                    // DetStride — infer every Nth present
     int   maxDets   = 32;
@@ -37,6 +40,15 @@ struct Config
     bool  weapons2[256] = {};               // session-1 weapon ids
     int   personClass   = 0;                // anchor class for weapon ownership (sess 0)
     int   dump        = 0;                  // DetDump — write input PPMs at probe runs
+    int   dumpEvery   = 0;                  // DetDumpEvery — write input PPM every Nth probe
+    float nmsIou      = 0.45f;              // DetNmsIou — NMS merge threshold
+    bool  nmsAg       = false;              // DetNmsAg — class-agnostic NMS
+    int   minHits     = 2;                  // DetMinHits — track confirm gate
+    int   minHitsW    = 4;                  // DetMinHitsWeapon — weapon confirm gate
+    int   envCls      = -1;                 // DetEnvCls — anchor-context class id (sess 0)
+    bool  envNeed     = false;              // DetEnvNeed — drop all dets when env class absent
+    bool  depthGate   = false;              // DetDepthGate — flat-depth scene mute
+    float depthVar    = 2e-4f;              // DetDepthVar — depth-variance floor
 };
 
 // Thread-safe (config/hotkey thread). classes/weapons are CSV names (COCO table,
@@ -46,6 +58,22 @@ void SetConfig(const char* model, const char* model2, float conf, int stride,
                const char* classesCsv, const char* weaponsCsv,
                const char* classes2Csv, const char* weapons2Csv, int dump,
                const char* model3, float clsConf) noexcept;
+
+// Decoder/tracker/scene-gate knobs — same dirty-apply path as SetConfig.
+void SetTunables(float nmsIou, bool nmsAg, int minHits, int minHitsWeapon,
+                 int envCls, bool envNeed, int dumpEvery,
+                 bool depthGate, float depthVar, float conf2,
+                 float sameObjIou) noexcept;
+
+// Scene mute: while set (externally by the ortho latch, or internally via
+// g_sceneBlock) Update feeds the tracker nothing so FP tracks coast out.
+void SetMuted(bool muted) noexcept;
+bool SceneMuted() noexcept;          // internal gate latched (depth flat; scene-cls later)
+const char* MuteReason() noexcept;   // HUD status text, e.g. "DEPTH FLAT v=0.0000" — nullptr when off
+
+// Render thread: a screen-sized depth texture was bound this frame — the
+// depth-variance gate's sample source. Non-owning pointer in, AddRef'd inside.
+void NoteSceneDepth(ID3D11Texture2D* tex) noexcept;
 
 // Lazily builds D3D12/DML/ORT/buffers. Returns false (and latches) on failure.
 bool Ensure(ID3D11Device* dev) noexcept;

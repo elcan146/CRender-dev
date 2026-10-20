@@ -1,7 +1,8 @@
 """Screen Vision — faithful desktop port of CRender's Terminator
-pipeline. Same decode (raw ONNX output, letterbox undo, per-class NMS 0.45,
-crop-fill rejection, cross-crop dedup, sqrt weapon remap, optional stage-2
-classifier), same tracker (IoU/EMA/coast/lock), same HUD (8x8 glyph atlas,
+pipeline. Same decode (raw ONNX output, letterbox undo, NMS at DetNmsIou
+[+DetNmsAg class-agnostic], crop-fill rejection, cross-crop dedup, sqrt
+weapon remap, env-class gate, optional stage-2 classifier), same tracker
+(TrkIou/TrkDist/TrkEma/TrkCoast/TrkLockAfter), same HUD (8x8 glyph atlas,
 columns, reticle, OBB brackets, sight lines) — drawn on a transparent
 click-through overlay over your live desktop, or in a styled mirror window.
 
@@ -86,7 +87,10 @@ class Tracker:
             box = d["box"]
             best, best_iou = -1, IOU_MATCH
             for i, tr in enumerate(self.tracks):
-                if i in used:
+                # Same-cls only: sess0 COCO and sess1 (1000+) labels share
+                # geometry, so an overlapping gun det would steal a person
+                # track and flip tr["cls"] every frame without this.
+                if i in used or tr["cls"] != d["cls"]:
                     continue
                 v = _iou(box, tr["box"])
                 if v > best_iou:
@@ -95,7 +99,7 @@ class Tracker:
                 cx, cy = (box[0] + box[2]) * 0.5, (box[1] + box[3]) * 0.5
                 best_d = DIST_MATCH * DIST_MATCH
                 for i, tr in enumerate(self.tracks):
-                    if i in used:
+                    if i in used or tr["cls"] != d["cls"]:
                         continue
                     dx = cx - (tr["box"][0] + tr["box"][2]) * 0.5
                     dy = cy - (tr["box"][1] + tr["box"][3]) * 0.5
@@ -187,6 +191,11 @@ class Config:
         self.model3 = a.model3 or cfg.get("DetModel3", "")
         c = a.conf if a.conf is not None else cfg.get("DetConf", 0.35)
         self.conf = min(max(c, 0.05), 0.95)
+        # Weapon-session floor (DetConf2): UIs are full of pistol-shaped icons
+        # (handsets, emoji) that pass the loose shared floor. Falls back to
+        # DetConf when unset.
+        c2 = cfg.get("DetConf2")
+        self.conf2 = min(max(float(c2), 0.05), 0.95) if c2 is not None else self.conf
         s = a.stride if a.stride is not None else cfg.get("DetStride", 1)
         self.stride = min(max(s, 1), 30)
         cc = a.cls_conf if a.cls_conf is not None else cfg.get("DetClsConf", 0.85)
@@ -202,9 +211,30 @@ class Config:
         self.weapons2 = set(_csv_ids(a.weapons2 or cfg.get("DetWeapon2", "0,1")))
         self.weapons2.discard(1)
         self.person_cls = 0                        # g_cfg.personClass
+        # Scene-gate knobs (det::SetTunables parity). NMS + hit confirmation
+        # port cleanly; the ortho-ratio and depth-variance gates are D3D11-hook
+        # features (draw CBs / bound DSV) with no screen-capture equivalent.
+        self.nms_iou = min(max(float(cfg.get("DetNmsIou", 0.45)), 0.10), 0.95)
+        self.nms_ag = bool(cfg.get("DetNmsAg", False))
+        self.min_hits = min(max(int(cfg.get("DetMinHits", 2)), 1), 30)
+        self.min_hits_w = min(max(int(cfg.get("DetMinHitsWeapon", 4)), 1), 60)
+        self.env_cls = int(cfg.get("DetEnvCls", -1))
+        self.env_need = bool(cfg.get("DetEnvNeed", False))
+        # Weapon box that shares most of its area with a person box is the
+        # same object relabeled (real gun boxes are far smaller than their
+        # holder's box). 0 disables.
+        self.same_iou = min(max(float(cfg.get("DetSameObjIoU", 0.55)), 0.0), 0.95)
         # HUD toggles
         self.hud = bool(cfg.get("TermHud", True))
         self.brackets = bool(cfg.get("TermBrackets", True))
+        # Tracker tuning (term::SetTuning clamps). Read every load() so F11
+        # reload retunes the live tracker exactly like the in-game config.
+        global IOU_MATCH, DIST_MATCH, EMA, COAST, LOCK_AFTER
+        IOU_MATCH = min(max(float(cfg.get("TrkIou", 0.25)), 0.05), 0.95)
+        DIST_MATCH = min(max(float(cfg.get("TrkDist", 0.08)), 0.01), 0.50)
+        EMA = min(max(float(cfg.get("TrkEma", 0.35)), 0.05), 1.00)
+        COAST = min(max(float(cfg.get("TrkCoast", 0.35)), 0.0), 2.00)
+        LOCK_AFTER = min(max(float(cfg.get("TrkLockAfter", 1.2)), 0.0), 30.0)
         # AI stylizer (AiPass)
         self.ai_model = cfg.get("AiModel", "")
         self.ai_w = int(cfg.get("AiWidth", 640))
@@ -254,14 +284,19 @@ class Sess:
         if len(shp) != 4 or shp[1] != 3:
             raise ValueError(f"{path.name}: detector input must be [1,3,H,W]")
         self.inH, self.inW = shp[2], shp[3]
-        self.classifier = idx == 2
         self.obb = "obb" in path.name.lower()      # in-game filename sniff
         od = [int(v) for v in self.sess.get_outputs()[0].shape]
+        # sess2 accepts [1,C] logits (a real classifier) or a detector-shaped
+        # [1,R,N]/[1,N,R] output — a second weapon detector then acts as a
+        # second-opinion check on the candidate crop.
+        self.classifier = idx == 2 and len(od) == 2
         if self.classifier:
-            if len(od) != 2 or od[0] != 1 or not (1 <= od[1] <= 8):
+            if od[0] != 1 or not (1 <= od[1] <= 8):
                 raise ValueError(f"{path.name}: classifier output must be [1,C]")
             self.nCls = od[1]
         else:
+            if len(od) != 3:
+                raise ValueError(f"{path.name}: detector output must be [1,R,N]")
             r = min(od[1], od[2])
             self.nCls = r - (5 if self.obb else 4)
         self.rect = (0.0, 0.0, 1.0, 1.0)
@@ -293,10 +328,12 @@ def make_input(frame, rect, in_w: int, in_h: int) -> np.ndarray:
 
 
 def decode(s: Sess, out: np.ndarray, conf: float, classes: list[int],
-           cls_base: int, bb_w: int, bb_h: int, cls_set=None) -> list[dict]:
+           cls_base: int, bb_w: int, bb_h: int, nms_iou: float = 0.45,
+           nms_ag: bool = False) -> list[dict]:
     """Exact port of Detect.cpp Decode(): layout sniff, per-class best score,
     letterbox undo + src-rect map, OBB corner rotation, size/crop-fill gates,
-    score-sort, per-class NMS 0.45. Returns normalized dets (<=64 raw)."""
+    score-sort, NMS at cfg nms_iou (class-agnostic when nms_ag). Returns
+    normalized dets (<=64 raw)."""
     out = out[0]
     if out.shape[0] > out.shape[1]:
         out = out.T                                # -> (R, N)
@@ -366,17 +403,18 @@ def decode(s: Sess, out: np.ndarray, conf: float, classes: list[int],
             break
 
     raw.sort(key=lambda d: -d["score"])
-    # Per-class NMS IoU 0.45 (suppression only from strictly-higher scores —
+    # NMS at DetNmsIou (suppression only from strictly-higher scores —
     # `raw[j].score > raw[i].score` skips, equal scores die like in-game).
+    # DetNmsAg drops the same-class check so cross-class overlap kills too.
     dead = [False] * len(raw)
     for i in range(len(raw)):
         if dead[i]:
             continue
         for j in range(i + 1, len(raw)):
-            if (dead[j] or raw[j]["cls"] != raw[i]["cls"]
+            if (dead[j] or (not nms_ag and raw[j]["cls"] != raw[i]["cls"])
                     or raw[j]["score"] > raw[i]["score"]):
                 continue
-            if _iou(raw[i]["box"], raw[j]["box"]) > 0.45:
+            if _iou(raw[i]["box"], raw[j]["box"]) > nms_iou:
                 dead[j] = True
     return [d for i, d in enumerate(raw) if not dead[i]]
 
@@ -404,7 +442,8 @@ class Detector:
                 actual = self.sess[i].sess.get_providers()[0]
                 print(f"sess{i}: {p.name} [1,3,{self.sess[i].inH},"
                       f"{self.sess[i].inW}] nCls={self.sess[i].nCls}"
-                      + (" classifier" if i == 2 else "")
+                      + ((" classifier" if self.sess[i].classifier
+                          else " second-opinion") if i == 2 else "")
                       + (" obb" if self.sess[i].obb else "")
                       + f" [{actual}]"
                       + f" ({(time.perf_counter() - t0) * 1000:.0f} ms)")
@@ -424,10 +463,12 @@ class Detector:
         if s0 is not None:
             s0.rect = (0.0, 0.0, 1.0, 1.0)
             out = s0.run(make_input(frame, s0.rect, s0.inW, s0.inH))
-            dets += decode(s0, out, self.cfg.conf, self.cfg.classes, 0, w, h)
+            dets += decode(s0, out, self.cfg.conf, self.cfg.classes, 0, w, h,
+                           self.cfg.nms_iou, self.cfg.nms_ag)
         if s1 is not None:
-            # Person-anchored crops when deferring (torso expansion, max 3),
-            # else one full-frame pass.
+            # Person-anchored crops when deferring (torso expansion, max 3)
+            # PLUS one full-frame pass — crops give zoom for small guns near
+            # people, the full pass catches guns with no person anchor.
             if defer:
                 rects = []
                 for d in dets:
@@ -439,15 +480,15 @@ class Detector:
                     ry = max(py0 - ph * 0.15, 0.0)
                     rects.append((rx, ry, min(pw * 1.90, 1.0 - rx),
                                   min(ph * 1.15, 1.0 - ry)))
-                if not rects:
-                    rects = [(0.0, 0.0, 1.0, 1.0)]
+                rects.append((0.0, 0.0, 1.0, 1.0))
             else:
                 rects = [(0.0, 0.0, 1.0, 1.0)]
             for rect in rects:
                 s1.rect = rect
                 out = s1.run(make_input(frame, rect, s1.inW, s1.inH))
-                dets += decode(s1, out, self.cfg.conf, self.cfg.classes2,
-                               SESS1_BASE, w, h)
+                dets += decode(s1, out, self.cfg.conf2, self.cfg.classes2,
+                               SESS1_BASE, w, h,
+                               self.cfg.nms_iou, self.cfg.nms_ag)
         # Cross-crop dedup (same class; IoU 0.3 weapons / 0.6 other).
         dets.sort(key=lambda d: -d["score"])
         out_d = []
@@ -458,7 +499,25 @@ class Detector:
                 continue
             out_d.append(d)
         dets = out_d[: self.cfg.max_dets]
-        # Stage-2 classifier gate: P(weapon|25%-expanded crop) >= clsConf.
+        # Anchor-context gate (DetEnvCls/DetEnvNeed): env-class absent -> drop
+        # everything; present -> strip the marker box itself.
+        if self.cfg.env_need and self.cfg.env_cls >= 0:
+            env = any(d["cls"] == self.cfg.env_cls for d in dets)
+            dets = [d for d in dets if d["cls"] != self.cfg.env_cls] if env else []
+        # Same-object contradiction (DetSameObjIoU): a "gun" sharing most of a
+        # person box's area is a relabeled person — drop the weapon, keep the
+        # person. Held guns are small boxes inside the person box (low IoU) so
+        # they're untouched.
+        if self.cfg.same_iou > 0.0:
+            persons = [d["box"] for d in dets if d["cls"] == self.cfg.person_cls]
+            if persons:
+                dets = [d for d in dets
+                        if not (self.cfg.is_weapon(d["cls"])
+                                and any(_iou(d["box"], pb) > self.cfg.same_iou
+                                        for pb in persons))]
+        # Stage-2 gate: each surviving weapon candidate is re-scored on a
+        # 25%-expanded crop — P(weapon) for a [1,C] classifier, or the other
+        # detector's strongest class score as a second opinion. >= clsConf.
         if s2 is not None and dets:
             kept = []
             for d in dets:
@@ -471,14 +530,21 @@ class Detector:
                 rect = (rx, ry, min(x1 - x0 + mx * 2, 1.0 - rx),
                         min(y1 - y0 + my * 2, 1.0 - ry))
                 s2.rect = rect
-                logits = s2.run(make_input(frame, rect, s2.inW, s2.inH))[0]
-                if logits.size == 1:
-                    p = 1.0 / (1.0 + math.exp(-float(logits[0])))
+                o2 = s2.run(make_input(frame, rect, s2.inW, s2.inH))[0]
+                if s2.classifier:
+                    if o2.size == 1:
+                        p = 1.0 / (1.0 + math.exp(-float(o2[0])))
+                    else:
+                        e = np.exp(o2 - o2.max())
+                        p = float(e[1] / e.sum())  # softmax class-1
                 else:
-                    e = np.exp(logits - logits.max())
-                    p = float(e[1] / e.sum())      # softmax class-1
+                    if o2.shape[0] > o2.shape[1]:
+                        o2 = o2.T                  # -> (R, N)
+                    p = float(o2[5 if s2.obb else 4:, :].max())
                 if p >= self.cfg.cls_conf or p < 0.0:
                     kept.append(d)
+                else:
+                    print(f"sess2 reject cls={d['cls']} P={p:.2f}")
             dets = kept
         return dets
 
@@ -1098,7 +1164,8 @@ def main() -> None:
             trk.update(cur_dets, now - last["t"], c.max_targets)
             last["t"] = now
             view = [t for t in trk.tracks
-                    if t["hits"] >= (4 if c.is_weapon(t["cls"]) else 2)]
+                    if t["hits"] >= (c.min_hits_w if c.is_weapon(t["cls"])
+                                     else c.min_hits)]
 
             with lock:
                 style = shared["style"]

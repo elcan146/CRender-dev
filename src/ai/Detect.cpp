@@ -114,7 +114,8 @@ struct Sess
     int             inW = 0, inH = 0;    // model input dims
     int             nCls = 0;            // 4 + nCls rows in the output
     bool            obb = false;         // YOLO-OBB layout: 4 + nCls + 1(angle) rows
-    bool            classifier = false;  // sess2: [1,C] logits, P(weapon|crop)
+    bool            classifier = false;  // sess2 with [1,C] logits; a detector-shaped
+                                         // sess2 runs as a second-opinion score check
     // bb-normalized source rect fed into this session's input — sess1 cascades
     // onto the previous pass's best person box (optical zoom for weapons).
     float           rectX = 0.0f, rectY = 0.0f, rectW = 1.0f, rectH = 1.0f;
@@ -164,6 +165,41 @@ term::Tracker g_trk;
 const char* g_labels[term::Tracker::kMax] = {};
 hud::Line   g_sight[32];
 int         g_nSight = 0;
+
+// ---- scene gates: external mute + depth-variance probe --------------------
+volatile LONG g_muted      = 0;      // external gate (ortho-draw latch) via SetMuted
+volatile LONG g_sceneBlock = 0;      // internal hold ticks (depth flat now, scene-cls later)
+constexpr LONG kGateHold   = 4;      // presents a gate verdict survives without re-probe
+
+ID3D11Texture2D*          g_depthSrc   = nullptr; // last screen-sized depth tex (owned ref)
+ID3D11Texture2D*          g_depthTried = nullptr; // tex the SRV build was last attempted on
+ID3D11ShaderResourceView* g_depthSRV   = nullptr;
+bool                      g_depthSRVms = false;   // SRV is TEXTURE2DMS (binds t1)
+volatile LONG             g_depthSeen  = 0;       // a screen DSV bound since the last Run
+ID3D11ComputeShader*      g_depthCS    = nullptr;
+ID3D11Buffer*             g_depthBuf   = nullptr; // 4096-float RWStructuredBuffer
+ID3D11UnorderedAccessView* g_depthUAV  = nullptr;
+ID3D11Buffer*             g_depthStage = nullptr; // 16KB staging readback
+ID3D11Buffer*             g_depthCB    = nullptr; // 16B: src dims + msaa flag
+ID3D11Query*              g_depthQuery = nullptr;
+bool                      g_depthOff   = false;   // objects unavailable — stay off
+float                     g_depthVarV  = -1.0f;   // last computed variance
+char                      g_muteWhy[48] = "DEPTH FLAT";
+
+// GPU depth reduce: 64x64 grid of depth samples -> structured float buffer.
+// Only this 16KB buffer is ever staged/mapped — the full depth buffer never
+// touches PCIe. MSAA textures sample texel 0 (variance is a coarse heuristic).
+const char kDepthCsSrc[] =
+    "Texture2D<float> depthTex : register(t0);"
+    "Texture2DMS<float> depthMS : register(t1);"
+    "RWStructuredBuffer<float> outp : register(u0);"
+    "cbuffer P : register(b0) { uint2 dim; uint msaa; uint pad; };"
+    "[numthreads(8,8,1)] void main(uint3 tid : SV_DispatchThreadID) {"
+    "  uint2 p = uint2(min((tid.x * 2u + 1u) * dim.x / 128u, dim.x - 1u),"
+    "                min((tid.y * 2u + 1u) * dim.y / 128u, dim.y - 1u));"
+    "  outp[tid.y * 64u + tid.x] = msaa != 0u ? depthMS.Load(int2(p), 0)"
+    "                                       : depthTex.Load(int3(p, 0));"
+    "}";
 
 const char kPsInSrc[] =
     "Texture2D src : register(t0);"
@@ -260,9 +296,22 @@ void Teardown() noexcept
     Rel(g_queue);
     Rel(g_dml);
     Rel(g_d12);
+    Rel(g_depthSRV);
+    g_depthTried = nullptr;
+    g_depthSRVms = false;
+    Rel(g_depthCS);
+    Rel(g_depthUAV);
+    Rel(g_depthBuf);
+    Rel(g_depthStage);
+    Rel(g_depthCB);
+    Rel(g_depthQuery);
+    Rel(g_depthSrc);
+    g_depthOff  = false;
+    g_depthVarV = -1.0f;
     if (g_fenceEv != nullptr) { CloseHandle(g_fenceEv); g_fenceEv = nullptr; }
     g_fenceVal = 0;
     g_ready = false;
+    InterlockedExchange(&g_sceneBlock, 0);
     g_trk.Clear();
     g_nDets = 0;
     g_nSight = 0;
@@ -353,13 +402,19 @@ bool ReadOutputShape(Sess& s) noexcept
     ONNXTensorElementDataType et = ONNX_TENSOR_ELEMENT_DATA_TYPE_UNDEFINED;
     size_t nd = 0;
     int64_t dims[8] = {};
+    // sess2 accepts either [1,C] logits (classifier) or a detector-shaped
+    // [1,R,N]/[1,N,R] output — a second weapon model then acts as a
+    // second-opinion check on the candidate crop.
+    const bool sess2 = (&s == &g_sess[2]);
     const bool ok = ai::Ok(api->CastTypeInfoToTensorInfo(ti, &tsi), "CastTypeInfoToTensorInfo") &&
                     tsi != nullptr &&
                     ai::Ok(api->GetTensorElementType(tsi, &et), "GetTensorElementType") &&
                     ai::Ok(api->GetDimensionsCount(tsi, &nd), "GetDimensionsCount") &&
-                    (s.classifier ? nd == 2 : nd == 3) &&
+                    (sess2 ? (nd == 2 || nd == 3) : nd == 3) &&
                     ai::Ok(api->GetDimensions(tsi, dims, nd), "GetDimensions");
     api->ReleaseTypeInfo(ti);
+    if (sess2 && ok)
+        s.classifier = (nd == 2);
     if (s.classifier)
     {
         // Micro-classifier: [1, C] logits — C==1 (sigmoid) or C>=2 (softmax)
@@ -629,6 +684,192 @@ bool SubmitInputCopy(Sess& s) noexcept
     return true;
 }
 
+// Depth-stencil format -> the SRV format that exposes its depth channel.
+DXGI_FORMAT DepthSrvFormat(DXGI_FORMAT f) noexcept
+{
+    switch (f)
+    {
+        case DXGI_FORMAT_D32_FLOAT:           case DXGI_FORMAT_R32_TYPELESS:
+            return DXGI_FORMAT_R32_FLOAT;
+        case DXGI_FORMAT_D24_UNORM_S8_UINT:   case DXGI_FORMAT_R24G8_TYPELESS:
+            return DXGI_FORMAT_R24_UNORM_X8_TYPELESS;
+        case DXGI_FORMAT_D16_UNORM:           case DXGI_FORMAT_R16_TYPELESS:
+            return DXGI_FORMAT_R16_UNORM;
+        case DXGI_FORMAT_D32_FLOAT_S8X24_UINT: case DXGI_FORMAT_R32G8X24_TYPELESS:
+            return DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS;
+        default:
+            return DXGI_FORMAT_UNKNOWN;
+    }
+}
+
+// Depth-gate pass objects: CS + 4096-float structured UAV + 16KB staging + CB +
+// event query. Pure D3D11 — independent of the ORT sessions, so the gate still
+// runs when no detector model is loaded. SRV is rebuilt per depth texture.
+bool DepthEnsure() noexcept
+{
+    if (g_depthOff || g_dev == nullptr || g_depthSrc == nullptr)
+        return false;
+    if (g_depthCS == nullptr)
+    {
+        ID3DBlob* b = retro::CompileShader(kDepthCsSrc, "main", "cs_5_0");
+        if (b == nullptr)
+        {
+            Log::Warn("det", "depth gate: CS compile failed — gate off");
+            g_depthOff = true;
+            return false;
+        }
+        HRESULT hr = g_dev->CreateComputeShader(b->GetBufferPointer(),
+                                              b->GetBufferSize(), nullptr, &g_depthCS);
+        b->Release();
+        D3D11_BUFFER_DESC obd = {};
+        obd.ByteWidth           = 64 * 64 * sizeof(float);
+        obd.Usage               = D3D11_USAGE_DEFAULT;
+        obd.BindFlags           = D3D11_BIND_UNORDERED_ACCESS;
+        obd.MiscFlags           = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
+        obd.StructureByteStride = sizeof(float);
+        if (SUCCEEDED(hr))
+            hr = g_dev->CreateBuffer(&obd, nullptr, &g_depthBuf);
+        D3D11_UNORDERED_ACCESS_VIEW_DESC uvd = {};
+        uvd.Format             = DXGI_FORMAT_UNKNOWN;
+        uvd.ViewDimension      = D3D11_UAV_DIMENSION_BUFFER;
+        uvd.Buffer.NumElements = 64 * 64;
+        if (SUCCEEDED(hr) && g_depthBuf != nullptr)
+            hr = g_dev->CreateUnorderedAccessView(g_depthBuf, &uvd, &g_depthUAV);
+        D3D11_BUFFER_DESC sbd = {};
+        sbd.ByteWidth      = 64 * 64 * sizeof(float);
+        sbd.Usage          = D3D11_USAGE_STAGING;
+        sbd.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+        if (SUCCEEDED(hr))
+            hr = g_dev->CreateBuffer(&sbd, nullptr, &g_depthStage);
+        D3D11_BUFFER_DESC cbd = {};
+        cbd.ByteWidth = 16;
+        cbd.Usage     = D3D11_USAGE_DEFAULT;
+        cbd.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+        if (SUCCEEDED(hr))
+            hr = g_dev->CreateBuffer(&cbd, nullptr, &g_depthCB);
+        D3D11_QUERY_DESC qd = { D3D11_QUERY_EVENT, 0 };
+        if (SUCCEEDED(hr))
+            hr = g_dev->CreateQuery(&qd, &g_depthQuery);
+        if (FAILED(hr))
+        {
+            Log::Warn("det", "depth gate: object create failed hr=0x%08lX — gate off",
+                      static_cast<unsigned long>(hr));
+            Rel(g_depthCS); Rel(g_depthUAV); Rel(g_depthBuf);
+            Rel(g_depthStage); Rel(g_depthCB); Rel(g_depthQuery);
+            g_depthOff = true;
+            return false;
+        }
+    }
+    // SRV for the current depth texture — retried only when the tex changes.
+    if (g_depthTried == g_depthSrc)
+        return g_depthSRV != nullptr;
+    g_depthTried = g_depthSrc;
+    Rel(g_depthSRV);
+    D3D11_TEXTURE2D_DESC td = {};
+    g_depthSrc->GetDesc(&td);
+    const DXGI_FORMAT sf = DepthSrvFormat(td.Format);
+    if ((td.BindFlags & D3D11_BIND_SHADER_RESOURCE) == 0 ||
+        sf == DXGI_FORMAT_UNKNOWN || td.ArraySize != 1)
+    {
+        Log::Warn("det", "depth gate: depth tex fmt=%u bind=0x%X arr=%u not sampleable — off",
+                  static_cast<UINT>(td.Format), td.BindFlags, td.ArraySize);
+        return false;
+    }
+    g_depthSRVms = td.SampleDesc.Count > 1;
+    D3D11_SHADER_RESOURCE_VIEW_DESC svd = {};
+    svd.Format = sf;
+    if (g_depthSRVms)
+        svd.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2DMS;
+    else
+    {
+        svd.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+        svd.Texture2D.MostDetailedMip = 0;
+        svd.Texture2D.MipLevels       = 1;
+    }
+    const HRESULT hr = g_dev->CreateShaderResourceView(g_depthSrc, &svd, &g_depthSRV);
+    if (FAILED(hr) || g_depthSRV == nullptr)
+    {
+        Log::Warn("det", "depth gate: SRV create failed hr=0x%08lX fmt=%u",
+                  static_cast<unsigned long>(hr), static_cast<UINT>(sf));
+        return false;
+    }
+    Log::Info("det", "depth gate: sampling %ux%u fmt=%u msaa=%u",
+              td.Width, td.Height, static_cast<UINT>(td.Format), td.SampleDesc.Count);
+    return true;
+}
+
+// 64x64 depth samples -> structured buffer -> 16KB staging map -> variance.
+// Flat backdrops/menus and maxed skyboxes both have ~0 variance -> sceneBlock.
+void ProbeDepth(ID3D11DeviceContext* ctx) noexcept
+{
+    if (!DepthEnsure())
+        return;
+
+    // CS stage state — StateBlock doesn't cover it.
+    ID3D11ComputeShader*       prevCS = nullptr;
+    ID3D11ShaderResourceView*  prevSRV[2] = {};
+    ID3D11UnorderedAccessView* prevUAV = nullptr;
+    ID3D11Buffer*              prevCB  = nullptr;
+    ctx->CSGetShader(&prevCS, nullptr, nullptr);
+    ctx->CSGetShaderResources(0, 2, prevSRV);
+    ctx->CSGetUnorderedAccessViews(0, 1, &prevUAV);
+    ctx->CSGetConstantBuffers(0, 1, &prevCB);
+
+    D3D11_TEXTURE2D_DESC td = {};
+    g_depthSrc->GetDesc(&td);
+    const UINT cbData[4] = { td.Width, td.Height, g_depthSRVms ? 1u : 0u, 0u };
+    ctx->UpdateSubresource(g_depthCB, 0, nullptr, cbData, 0, 0);
+    ctx->CSSetShader(g_depthCS, nullptr, 0);
+    ctx->CSSetConstantBuffers(0, 1, &g_depthCB);
+    ID3D11ShaderResourceView* srvs[2] = { g_depthSRVms ? nullptr : g_depthSRV,
+                                          g_depthSRVms ? g_depthSRV : nullptr };
+    ctx->CSSetShaderResources(0, 2, srvs);
+    ctx->CSSetUnorderedAccessViews(0, 1, &g_depthUAV, nullptr);
+    ctx->Dispatch(8, 8, 1);
+    ctx->CopyResource(g_depthStage, g_depthBuf);
+
+    ctx->CSSetShader(prevCS, nullptr, 0);
+    ctx->CSSetShaderResources(0, 2, prevSRV);
+    ctx->CSSetUnorderedAccessViews(0, 1, &prevUAV, nullptr);
+    ctx->CSSetConstantBuffers(0, 1, &prevCB);
+    if (prevCS != nullptr)  prevCS->Release();
+    for (ID3D11ShaderResourceView* s : prevSRV)
+        if (s != nullptr) s->Release();
+    if (prevUAV != nullptr) prevUAV->Release();
+    if (prevCB != nullptr)  prevCB->Release();
+
+    // Bounded wait, then read the 16KB result back.
+    ctx->End(g_depthQuery);
+    BOOL done = FALSE;
+    const DWORD t0 = GetTickCount();
+    while (ctx->GetData(g_depthQuery, &done, sizeof(done), 0) == S_FALSE &&
+           GetTickCount() - t0 < 100)
+        SwitchToThread();
+    if (!done)
+        return;
+    D3D11_MAPPED_SUBRESOURCE ms = {};
+    if (FAILED(ctx->Map(g_depthStage, 0, D3D11_MAP_READ, 0, &ms)) || ms.pData == nullptr)
+        return;
+    const float* v = static_cast<const float*>(ms.pData);
+    double s = 0.0, s2 = 0.0;
+    for (int i = 0; i < 64 * 64; ++i)
+    {
+        s  += v[i];
+        s2 += static_cast<double>(v[i]) * v[i];
+    }
+    ctx->Unmap(g_depthStage, 0);
+    const double mean = s / (64.0 * 64.0);
+    const double var  = s2 / (64.0 * 64.0) - mean * mean;
+    g_depthVarV = static_cast<float>(var);
+    if (var >= 0.0 && var < static_cast<double>(g_cfg.depthVar))
+    {
+        InterlockedExchange(&g_sceneBlock, kGateHold);
+        _snprintf_s(g_muteWhy, _TRUNCATE, "DEPTH FLAT v=%.5f", var);
+        Log::Info("det", "depth gate: flat scene var=%.6f < %.6f — HUD muted",
+                  var, static_cast<double>(g_cfg.depthVar));
+    }
+}
+
 // out: fp32 [1, R, N] or [1, N, R], R = 4 + nCls. Keeps the session's configured
 // classes only; session 1 ids are stored offset +kSess1Base.
 void Decode(const Sess& s, int idx, const float* out, size_t elems, int64_t d1, int64_t d2) noexcept
@@ -668,7 +909,11 @@ void Decode(const Sess& s, int idx, const float* out, size_t elems, int64_t d1, 
     for (int c = 0; c < N && nRaw < 64; ++c)
     {
         int bestCls = -1;
-        float best = g_cfg.conf;
+        // Session-1 (weapon) floor: UI/icon false positives clear the loose
+        // shared floor, so weapons can demand more without hurting recall.
+        const float confFloor = (idx == 1 && g_cfg.conf2 >= 0.0f) ? g_cfg.conf2
+                                                                  : g_cfg.conf;
+        float best = confFloor;
         for (int k = 0; k < nClasses; ++k)
         {
             const int cls = classList[k];
@@ -756,7 +1001,9 @@ void Decode(const Sess& s, int idx, const float* out, size_t elems, int64_t d1, 
         raw[j + 1] = v;
     }
 
-    // Per-class NMS (IoU 0.45), best score first.
+    // NMS (DetNmsIou), best score first. DetNmsAg drops the same-class check —
+    // overlapping boxes of different classes then kill each other (a UI glyph
+    // can't survive as both "gun" and "knife").
     bool dead[64] = {};
     for (int i = 0; i < nRaw; ++i)
     {
@@ -764,7 +1011,7 @@ void Decode(const Sess& s, int idx, const float* out, size_t elems, int64_t d1, 
             continue;
         for (int j = i + 1; j < nRaw; ++j)
         {
-            if (dead[j] || raw[j].cls != raw[i].cls || raw[j].score > raw[i].score)
+            if (dead[j] || (!g_cfg.nmsAg && raw[j].cls != raw[i].cls) || raw[j].score > raw[i].score)
                 continue;
             const float ix0 = raw[i].x0 > raw[j].x0 ? raw[i].x0 : raw[j].x0;
             const float iy0 = raw[i].y0 > raw[j].y0 ? raw[i].y0 : raw[j].y0;
@@ -775,7 +1022,7 @@ void Decode(const Sess& s, int idx, const float* out, size_t elems, int64_t d1, 
             const float inter = (ix1 - ix0) * (iy1 - iy0);
             const float ua = (raw[i].x1 - raw[i].x0) * (raw[i].y1 - raw[i].y0) +
                              (raw[j].x1 - raw[j].x0) * (raw[j].y1 - raw[j].y0) - inter;
-            if (ua > 0.0f && inter / ua > 0.45f)
+            if (ua > 0.0f && inter / ua > g_cfg.nmsIou)
                 dead[j] = true;
         }
     }
@@ -855,6 +1102,28 @@ bool InferSess(Sess& s, int idx, OrtAllocator* alloc, float* clsProb) noexcept
                         *clsProb = expf(data[1] - mx) / sum; // class 1 = weapon
                     }
                 }
+            }
+            else if (nd == 3 && clsProb != nullptr)
+            {
+                // Detector-mode sess2: second opinion on the candidate crop —
+                // keep the det only if the other model also fires there.
+                // Strongest class score over all anchors; the candidate's own
+                // box stays authoritative, so no decode needed.
+                const int64_t d1 = dims[1], d2 = dims[2];
+                const bool rowsFirst = d1 < d2;             // [1,R,N] vs [1,N,R]
+                const int64_t r = rowsFirst ? d1 : d2;
+                const int64_t n = rowsFirst ? d2 : d1;
+                const int row0 = s.obb ? 5 : 4;
+                float best2 = 0.0f;
+                for (int64_t rr = row0; rr < r; ++rr)
+                    for (int64_t c = 0; c < n; ++c)
+                    {
+                        const float v = rowsFirst ? data[rr * n + c]
+                                                  : data[c * r + rr];
+                        if (v > best2)
+                            best2 = v;
+                    }
+                *clsProb = best2;
             }
             else if (nd == 3)
             {
@@ -946,6 +1215,55 @@ void det::SetConfig(const char* model, const char* model2, float conf, int strid
               g_pending.sight, g_pending.sightLen, g_pending.nClasses, g_pending.nClasses2);
 }
 
+void det::SetTunables(float nmsIou, bool nmsAg, int minHits, int minHitsWeapon,
+                      int envCls, bool envNeed, int dumpEvery,
+                      bool depthGate, float depthVar, float conf2,
+                      float sameObjIou) noexcept
+{
+    AcquireSRWLockExclusive(&g_cfgLock);
+    g_pending.nmsIou    = nmsIou < 0.10f ? 0.10f : (nmsIou > 0.95f ? 0.95f : nmsIou);
+    g_pending.nmsAg     = nmsAg;
+    g_pending.minHits   = minHits < 1 ? 1 : (minHits > 30 ? 30 : minHits);
+    g_pending.minHitsW  = minHitsWeapon < 1 ? 1 : (minHitsWeapon > 60 ? 60 : minHitsWeapon);
+    g_pending.envCls    = envCls;
+    g_pending.envNeed   = envNeed;
+    g_pending.dumpEvery = dumpEvery < 0 ? 0 : dumpEvery;
+    g_pending.depthGate = depthGate;
+    g_pending.depthVar  = depthVar < 1e-7f ? 1e-7f : (depthVar > 1.0f ? 1.0f : depthVar);
+    // <0 keeps the -1 sentinel: sess-1 then shares g_cfg.conf.
+    g_pending.conf2     = conf2 < 0.0f ? -1.0f : (conf2 < 0.05f ? 0.05f : (conf2 > 0.95f ? 0.95f : conf2));
+    g_pending.sameObjIou = sameObjIou < 0.0f ? 0.0f : (sameObjIou > 0.95f ? 0.95f : sameObjIou);
+    InterlockedExchange(&g_dirty, 1);
+    ReleaseSRWLockExclusive(&g_cfgLock);
+}
+
+void det::SetMuted(bool muted) noexcept
+{
+    InterlockedExchange(&g_muted, muted ? 1 : 0);
+}
+
+bool det::SceneMuted() noexcept
+{
+    return g_sceneBlock > 0;
+}
+
+const char* det::MuteReason() noexcept
+{
+    return g_sceneBlock > 0 ? g_muteWhy : nullptr;
+}
+
+void det::NoteSceneDepth(ID3D11Texture2D* tex) noexcept
+{
+    InterlockedExchange(&g_depthSeen, 1);
+    if (tex == g_depthSrc)
+        return;
+    if (g_depthSrc != nullptr)
+        g_depthSrc->Release();
+    g_depthSrc = tex;
+    if (g_depthSrc != nullptr)
+        g_depthSrc->AddRef();
+}
+
 bool det::Ensure(ID3D11Device* dev) noexcept
 {
     if (dev == nullptr)
@@ -1014,8 +1332,22 @@ bool det::Ensure(ID3D11Device* dev) noexcept
 
 void det::Run(ID3D11DeviceContext* ctx, IDXGISwapChain* sc) noexcept
 {
-    if (!g_ready || g_failed || ctx == nullptr || sc == nullptr)
+    if (ctx == nullptr || sc == nullptr)
         return;
+    // Depth-gate bookkeeping runs per present even with no detector session
+    // live — the probe is pure D3D11. depthSeen marks "a screen DSV was bound
+    // since the previous present" so menu frames with no 3D pass abstain.
+    const bool depthFresh = InterlockedExchange(&g_depthSeen, 0) != 0;
+    if (g_sceneBlock > 0)
+        InterlockedDecrement(&g_sceneBlock);
+    if (!g_ready || g_failed)
+    {
+        const unsigned f0 = g_frame++;
+        const int s0 = g_cfg.stride < 1 ? 1 : g_cfg.stride;
+        if (g_cfg.depthGate && depthFresh && (f0 % static_cast<unsigned>(s0)) == 0)
+            ProbeDepth(ctx);
+        return;
+    }
     const unsigned frame = g_frame++;
     // Adaptive backoff: if a full pass costs more than ~33ms, stretch the
     // stride so detection keeps running but can't stall the game.
@@ -1026,11 +1358,16 @@ void det::Run(ID3D11DeviceContext* ctx, IDXGISwapChain* sc) noexcept
         if (eff > 120)
             eff = 120;
     }
-    if (eff > 1 && (frame % static_cast<unsigned>(eff)) != 0)
+    const unsigned effStride = static_cast<unsigned>(eff);
+    if (effStride > 1 && (frame % effStride) != 0)
         return; // keep last decode between strides
-    LARGE_INTEGER qf = {}, qt0 = {}, qt1 = {};
-    QueryPerformanceFrequency(&qf);
-    QueryPerformanceCounter(&qt0);
+    if (g_cfg.depthGate && depthFresh)
+        ProbeDepth(ctx); // ~16KB readback — no full-res copy ever leaves the GPU
+    if (g_muted != 0 || g_sceneBlock > 0)
+    {
+        g_nDets = 0; // scene gate: skip the whole inference pass
+        return;
+    }
     if (!EnsureBackbuffer(sc))
         return;
 
@@ -1053,7 +1390,9 @@ void det::Run(ID3D11DeviceContext* ctx, IDXGISwapChain* sc) noexcept
     int live = 0;
     for (Sess& s : g_sess)
     {
-        if (s.session == nullptr || s.inRTV == nullptr || s.classifier)
+        // sess2 is rendered per-candidate inside the gate — never full-frame.
+        if (s.session == nullptr || s.inRTV == nullptr || s.classifier ||
+            &s == &g_sess[2])
             continue;
         if (&s == &g_sess[1] && deferSess1)
             continue;
@@ -1087,16 +1426,26 @@ void det::Run(ID3D11DeviceContext* ctx, IDXGISwapChain* sc) noexcept
     static int s_probeIdx = 0;
     static const unsigned kProbeAt[] = { 30, 200, 600, 1200, 2400 };
     ++s_probeRuns;
-    if (s_probeIdx < 5 && s_probeRuns == kProbeAt[s_probeIdx])
+    // Scheduled probes (input sanity) + periodic PPM dumps for hard-negative
+    // mining — DetDumpEvery fires the same block every Nth inference tick.
+    const bool sched = s_probeIdx < 5 && s_probeRuns == kProbeAt[s_probeIdx];
+    const bool dumpTick = g_cfg.dumpEvery > 0 &&
+                          s_probeRuns % static_cast<unsigned>(g_cfg.dumpEvery) == 0;
+    if (sched || dumpTick)
     {
         const unsigned atRun = s_probeRuns;
-        ++s_probeIdx;
-        auto probe = [&](ID3D11Texture2D* tex, bool isFloat, const char* tag)
+        if (sched)
+            ++s_probeIdx;
+        // Probe both copies: does the raw bb land, and does it survive the
+        // letterbox+planar PS write? Read the CPU-side inputBuffer directly —
+        // decoding g_readback2 would confuse it with the model output.
+        auto probe = [&](ID3D11Texture2D* tex, const char* tag)
         {
             if (tex == nullptr)
                 return;
             D3D11_TEXTURE2D_DESC td = {};
             tex->GetDesc(&td);
+            const bool isFloat = td.Format == DXGI_FORMAT_R32_FLOAT;
             td.Usage = D3D11_USAGE_STAGING;
             td.BindFlags = 0;
             td.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
@@ -1129,9 +1478,9 @@ void det::Run(ID3D11DeviceContext* ctx, IDXGISwapChain* sc) noexcept
             }
             st->Release();
         };
-        probe(g_copy, false, "bbcopy");
-        probe(g_sess[0].inTex11, true, "in");
-        if (g_cfg.dump != 0 && g_sess[0].inTex11 != nullptr)
+        probe(g_copy, "bbcopy");
+        probe(g_sess[0].inTex11, "in");
+        if ((g_cfg.dump != 0 || g_cfg.dumpEvery > 0) && g_sess[0].inTex11 != nullptr)
         {
             // Reconstruct an RGB PPM from the planar float input — proves to
             // sanity_check.py exactly what the model scored on this frame.
@@ -1179,6 +1528,9 @@ void det::Run(ID3D11DeviceContext* ctx, IDXGISwapChain* sc) noexcept
         }
     }
 
+    LARGE_INTEGER qf = {}, qt0 = {}, qt1 = {};
+    QueryPerformanceFrequency(&qf);
+    QueryPerformanceCounter(&qt0);
     // ORT run each session: GPU input bound, outputs requested on CPU.
     OrtAllocator* alloc = nullptr;
     if (!ai::Ok(ai::Api()->GetAllocatorWithDefaultOptions(&alloc), "allocator"))
@@ -1191,9 +1543,10 @@ void det::Run(ID3D11DeviceContext* ctx, IDXGISwapChain* sc) noexcept
         if (s.session == nullptr)
             continue;
         // Source rects per infer: sess0 is always the full frame; a deferred
-        // sess1 instead scans each person box decoded THIS pass (max 3),
-        // expanded so slung weapons stay inside — full frame when none.
-        float rects[3][4] = { { 0.0f, 0.0f, 1.0f, 1.0f }, { 0,0,0,0 }, { 0,0,0,0 } };
+        // sess1 instead scans each person box decoded THIS pass (max 3 crops),
+        // expanded so slung weapons stay inside — plus one full-frame tail
+        // pass so guns with no person anchor are still seen.
+        float rects[4][4] = { { 0.0f, 0.0f, 1.0f, 1.0f }, { 0,0,0,0 }, { 0,0,0,0 }, { 0,0,0,0 } };
         int nRect = 1;
         if (i == 1 && deferSess1)
         {
@@ -1216,8 +1569,11 @@ void det::Run(ID3D11DeviceContext* ctx, IDXGISwapChain* sc) noexcept
                 rects[nRect][2] = rw; rects[nRect][3] = rh;
                 ++nRect;
             }
-            if (nRect == 0)
-                nRect = 1; // rects[0] is the identity — full-frame fallback
+            // Full-frame tail pass — a gun on a table/viewmodel with no
+            // person box nearby never sits inside a torso crop.
+            rects[nRect][0] = 0.0f; rects[nRect][1] = 0.0f;
+            rects[nRect][2] = 1.0f; rects[nRect][3] = 1.0f;
+            ++nRect;
         }
         retro::StateBlock saved2;
         if (i == 1 && deferSess1)
@@ -1283,9 +1639,59 @@ void det::Run(ID3D11DeviceContext* ctx, IDXGISwapChain* sc) noexcept
     }
     g_nDets = wDet;
 
-    // Stage-2 micro-classifier gate (sess2, optional): each surviving weapon
-    // candidate is cropped from the raw frame and scored P(weapon|crop);
-    // below DetClsConf it never reaches the tracker.
+    // Anchor-context gate (DetEnvCls/DetEnvNeed): models trained with a
+    // screen-spanning environment class only emit targets inside that context.
+    // Env absent this pass -> drop every box; present -> strip the marker
+    // itself (a screen-size box should never draw a bracket).
+    if (g_cfg.envNeed && g_cfg.envCls >= 0)
+    {
+        bool env = false;
+        int wEnv = 0;
+        for (int a = 0; a < g_nDets; ++a)
+        {
+            if (g_dets[a].cls == g_cfg.envCls)
+                env = true;
+            else
+                g_dets[wEnv++] = g_dets[a];
+        }
+        g_nDets = env ? wEnv : 0;
+    }
+
+    // Same-object contradiction (DetSameObjIoU): a weapon box that shares
+    // most of its area with a person box is a relabeled person, not a held
+    // gun — real weapon boxes are far smaller than the holder's box. 0 = off.
+    if (g_cfg.sameObjIou > 0.0f)
+    {
+        int wSame = 0;
+        for (int a = 0; a < g_nDets; ++a)
+        {
+            const term::Det d = g_dets[a];
+            if (!IsWeaponCls(d.cls)) { g_dets[wSame++] = d; continue; }
+            bool relabel = false;
+            for (int b = 0; b < g_nDets; ++b)
+            {
+                if (b == a || g_dets[b].cls != g_cfg.personClass)
+                    continue;
+                const term::Det& p = g_dets[b];
+                const float ix0 = d.x0 > p.x0 ? d.x0 : p.x0, iy0 = d.y0 > p.y0 ? d.y0 : p.y0;
+                const float ix1 = d.x1 < p.x1 ? d.x1 : p.x1, iy1 = d.y1 < p.y1 ? d.y1 : p.y1;
+                if (ix1 <= ix0 || iy1 <= iy0)
+                    continue;
+                const float inter = (ix1 - ix0) * (iy1 - iy0);
+                const float uni = (d.x1 - d.x0) * (d.y1 - d.y0) +
+                                  (p.x1 - p.x0) * (p.y1 - p.y0) - inter;
+                if (uni > 0.0f && inter / uni > g_cfg.sameObjIou) { relabel = true; break; }
+            }
+            if (!relabel)
+                g_dets[wSame++] = d;
+        }
+        g_nDets = wSame;
+    }
+
+    // Stage-2 gate (sess2, optional): each surviving weapon candidate is
+    // cropped from the raw frame and re-scored — P(weapon|crop) for a [1,C]
+    // classifier, or the strongest class score when sess2 is a second
+    // weapon detector. Below DetClsConf it never reaches the tracker.
     if (g_sess[2].session != nullptr && g_sess[2].inRTV != nullptr && g_nDets > 0)
     {
         Sess& cs = g_sess[2];
@@ -1365,9 +1771,13 @@ void det::Run(ID3D11DeviceContext* ctx, IDXGISwapChain* sc) noexcept
 
 const term::Track* det::Update(float dt, int maxTargets, int* count) noexcept
 {
-    g_trk.Update(g_dets, g_nDets, dt, maxTargets);
+    // Scene mute (ortho latch / depth flat): feed the tracker nothing so FP
+    // tracks coast out and can't stack hits behind the gate.
+    const bool muted = g_muted != 0 || g_sceneBlock > 0;
+    g_trk.Update(muted ? nullptr : g_dets, muted ? 0 : g_nDets, dt,
+                 muted ? 0 : maxTargets);
 
-    // Temporal confirm gate: a track must match a detection on >=2 passes
+    // Temporal confirm gate: a track must match a detection on >=minHits passes
     // before it is shown — single-pass flashes never draw a bracket.
     static term::Track s_view[term::Tracker::kMax];
     const term::Track* all = g_trk.Tracks();
@@ -1375,9 +1785,8 @@ const term::Track* det::Update(float dt, int maxTargets, int* count) noexcept
     for (int i = 0; i < g_trk.Count(); ++i)
     {
         // Flicker gate: false-positive weapon hits come and go and rarely
-        // confirm past a few passes; real weapons persist. Persons confirm
-        // at the usual 2.
-        const int need = IsWeaponCls(all[i].cls) ? 4 : 2;
+        // confirm past a few passes; real weapons persist.
+        const int need = IsWeaponCls(all[i].cls) ? g_cfg.minHitsW : g_cfg.minHits;
         if (all[i].hits >= need)
             s_view[nv++] = all[i];
     }

@@ -11,7 +11,7 @@ x86/
 [Rr]elease/
 [Rr]elWithDebInfo/
 [Mm]inSizeRel/
-
+test-1/
 # --- Visual Studio / MSVC ---
 .vs/
 *.user

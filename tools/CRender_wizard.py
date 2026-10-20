@@ -173,12 +173,16 @@ class Window(QMainWindow):
         self.neural = QCheckBox("Include Terminator AI files (ONNX Runtime + DirectML)")
         self.term_fx = QCheckBox("Terminator HUD + lens (brackets, reticle, scanlines)")
         self.term_fx.setChecked(True)
+        self.scene_gates = QCheckBox(
+            "Scene gates: mute HUD brackets on menus/UI (ortho draws + depth flat)")
+        self.scene_gates.setChecked(False)   # opt-in — can over-mute on HUD-heavy games
 
         form = QFormLayout()
         form.addRow("Start mode (F9 cycles):", self.mode)
         form.addRow("Pixel scale / RenderScale:", self.scale)
         form.addRow("RetroFX block size:", self.pixel)
         form.addRow(self.skip_shadows)
+        form.addRow(self.scene_gates)
         form.addRow(self.patch_cb)
         form.addRow(self.neural)
         form.addRow(self.term_fx)
@@ -272,6 +276,8 @@ class Window(QMainWindow):
             self.mode.setCurrentText(mode)
         self.scale.setValue(int(cfg.get("RenderScale", 1)))
         self.pixel.setValue(int(cfg.get("PixelPx", self.scale.value())))
+        self.scene_gates.setChecked(bool(cfg.get("SceneOrthoPct", 0))
+                                    or bool(cfg.get("DetDepthGate", 0)))
         self.skip_shadows.setChecked(bool(cfg.get("SkipShadows", 0)))
         self.patch_cb.setChecked(bool(cfg.get("PatchScreenCB", 0)))
         self.term_fx.setChecked(bool(cfg.get("TermHud", 1)) and bool(cfg.get("TermLens", 1)))
@@ -318,6 +324,30 @@ class Window(QMainWindow):
         # Inert when the ONNX files aren't deployed.
         cfg["DetModel2"] = "best.onnx"
         cfg["DetConf"] = 0.15
+        # Weapon-session floor: desktop/stream UIs are full of pistol-shaped
+        # icons that clear 0.15. Persons keep the loose floor; guns need more.
+        cfg["DetConf2"] = 0.22
+        cfg["DetSameObjIoU"] = 0.55
+        # Stage-2 (DetModel3) left off: det_weapons.onnx is real-world-trained
+        # and scores ~0.01-0.5 on game guns — as a gate it eats detections.
+        # The slot also accepts a true [1,C] classifier export when one exists.
+        cfg["DetModel3"] = ""
+        cfg["DetClsConf"] = 0.5
+        # Recall tuning shared with the desktop overlay: up to 12 tracked
+        # targets and a 2-hit weapon confirm (was 4 — flickery low-conf dets
+        # died before drawing).
+        cfg["HudMaxTargets"] = 12
+        cfg["DetMinHits"] = 2
+        cfg["DetMinHitsWeapon"] = 1
+        # Scene gates: ortho-ratio latches when UI/2D draws dominate the frame
+        # (menus, pause screens) and depth-variance mutes on flat depth — the
+        # two biggest false-positive generators for the Terminator HUD.
+        # Inert in non-Terminator modes; brackets stay muted only while gated.
+        on = self.scene_gates.isChecked()
+        cfg["SceneOrthoPct"] = 0.60 if on else 0.0
+        cfg["SceneOrthoMin"] = 16
+        cfg["DetDepthGate"] = 1 if on else 0
+        cfg["DetDepthVar"] = 0.0002
         if cfg["Mode"] == "Terminator":
             cfg["AiModel"] = "terminator_vision.onnx"
             cfg["DetDump"] = 0

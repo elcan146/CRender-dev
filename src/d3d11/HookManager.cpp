@@ -144,6 +144,15 @@ ULONGLONG g_psLogged[256] = {};      // PassDump dedup set
 struct CbOrthoRec { ID3D11Buffer* buf; bool ortho; };
 CbOrthoRec g_cbOrtho[64] = {};
 
+// Scene gate (ortho-ratio mute): per-frame draw classification + latch.
+// Counted in NoteTargetDraw (screen-target draws on the immediate context),
+// latched at the present boundary in TerminatorOverlay.
+float g_sceneOrthoPct = 0.0f;   // SceneOrthoPct — 0 disables the gate
+int   g_sceneOrthoMin = 16;     // SceneOrthoMin — min draws before the ratio means anything
+int   g_frmOrtho = 0, g_frmScene = 0, g_frmNoCB = 0;
+volatile LONG g_uiDom = 0;      // latched: UI/ortho draws dominate the frame
+float g_uiRatio = 0.0f;         // last frame's ortho fraction (for HUD status)
+
 struct PatchRec { ID3D11Resource* res; void* ptr; UINT bytes; };
 PatchRec g_patchMaps[32] = {};
 
@@ -828,6 +837,26 @@ void NoteBoundTargets(ID3D11DeviceContext* ctx, UINT n,
         {
             g_boundDSVw = vw; g_boundDSVh = vh;
             if (vs) scaled = 1;
+            // Depth gate: screen-sized depth textures feed det's variance probe.
+            // Shadow/offscreen DSVs never overwrite — only the last bound screen
+            // depth is sampled. (Cheap pointer stash; det AddRefs internally.)
+            if (IsScreenTarget(vw, vh))
+            {
+                ID3D11Resource* dr = nullptr;
+                dsv->GetResource(&dr);
+                if (dr != nullptr)
+                {
+                    ID3D11Texture2D* dtex = nullptr;
+                    dr->QueryInterface(__uuidof(ID3D11Texture2D),
+                                       reinterpret_cast<void**>(&dtex));
+                    dr->Release();
+                    if (dtex != nullptr)
+                    {
+                        det::NoteSceneDepth(dtex);
+                        dtex->Release();
+                    }
+                }
+            }
         }
     }
     g_boundHasRTV = hasRTV;
@@ -850,6 +879,19 @@ void NoteTargetDraw(ID3D11DeviceContext* ctx) noexcept
         g_inRetroPass != 0 || ctx != g_ctx || g_boundHasRTV == 0 ||
         !IsScreenTarget(g_boundRTw, g_boundRTh))
         return;
+    // Ortho-ratio scene gate: classify the draw by the CB bound at VS slot 0.
+    // (Counted here, not in targets::OnDraw — that early-outs on !g_camValid,
+    // and a pure 2D menu may never write a perspective CB.)
+    if (g_vsCB0 == nullptr)
+        ++g_frmNoCB;
+    else
+    {
+        const size_t h = reinterpret_cast<UINT_PTR>(g_vsCB0) & 63;
+        if (g_cbOrtho[h].buf == g_vsCB0 && g_cbOrtho[h].ortho)
+            ++g_frmOrtho;
+        else
+            ++g_frmScene;
+    }
     targets::OnDraw(g_vb0.buf, g_vb0.stride, g_vb0.offset, g_vsCB0);
 }
 
@@ -1097,12 +1139,21 @@ void STDMETHODCALLTYPE hkUpdateSubresource(ID3D11DeviceContext* ctx, ID3D11Resou
             buf->Release();
         }
     }
-    if (g_mode == static_cast<LONG>(hooks::RetroMode::Terminator) && g_termBrackets != 0 &&
-        g_inRetroPass == 0 && ctx == g_ctx && box == nullptr && src != nullptr)
+    // Mark CBs whose full write looks like an ortho projection — feeds the
+    // ortho-ratio scene gate and the (previously inert) SkipOrthographic path.
+    // Only when a consumer is armed; GetDesc per UpdateSubresource isn't free.
+    if (box == nullptr && src != nullptr &&
+        (g_skipOrtho != 0 ||
+         (g_mode == static_cast<LONG>(hooks::RetroMode::Terminator) && g_termBrackets != 0)))
     {
-        const UINT bytes = PatchableCBBytes(res);
-        if (bytes == 64 || bytes == 144)
-            targets::OnUpdateCB(static_cast<ID3D11Buffer*>(res), bytes, src);
+        const UINT cbBytes = PatchableCBBytes(res);
+        if (cbBytes >= 64)
+        {
+            const size_t h = reinterpret_cast<UINT_PTR>(res) & 63;
+            g_cbOrtho[h] = { static_cast<ID3D11Buffer*>(res), LooksOrtho(src, cbBytes) };
+        }
+        if (g_inRetroPass == 0 && ctx == g_ctx && (cbBytes == 64 || cbBytes == 144))
+            targets::OnUpdateCB(static_cast<ID3D11Buffer*>(res), cbBytes, src);
     }
     // never rewrite our own pass constants (their dims can equal the screen size)
     if (g_patchScreenCB != 0 && g_inRetroPass == 0 && box == nullptr && src != nullptr && RenderScale() > 1)
@@ -1194,8 +1245,10 @@ void TerminatorBase(ID3D11DeviceContext* ctx, ID3D11Device* dev, IDXGISwapChain*
     InterlockedExchange(&g_inRetroPass, 1);
     retro::Ensure(dev);
     // Detector samples the RAW frame — must run before any restyle touches the backbuffer.
-    if (det::Ensure(dev))
-        det::Run(ctx, sc);
+    // Run is invoked even when Ensure fails (no model / ORT down): it also owns
+    // the depth-variance probe, which is pure D3D11 and works session-free.
+    det::Ensure(dev);
+    det::Run(ctx, sc);
     if (g_termBase == 0)
     {
         InterlockedExchange(&g_termOnnx, 0);
@@ -1232,12 +1285,34 @@ void TerminatorOverlay(ID3D11DeviceContext* ctx, IDXGISwapChain* target) noexcep
                    ? static_cast<float>(static_cast<double>(now.QuadPart - prev.QuadPart) / static_cast<double>(freq.QuadPart))
                    : 0.0f;
     prev = now;
+    // Ortho-ratio scene gate: this frame's screen-target draws classified by VS
+    // slot-0 CB. Latch on at SceneOrthoPct, release below pct*0.75 (hysteresis);
+    // frames with too few draws abstain so a dip can't unlatch mid-menu.
+    const int dTotal = g_frmOrtho + g_frmScene + g_frmNoCB;
+    if (g_sceneOrthoPct <= 0.0f)
+    {
+        if (g_uiDom != 0)
+            InterlockedExchange(&g_uiDom, 0);
+    }
+    else if (dTotal >= g_sceneOrthoMin)
+    {
+        g_uiRatio = static_cast<float>(g_frmOrtho) / static_cast<float>(dTotal);
+        if (g_uiDom == 0 && g_uiRatio >= g_sceneOrthoPct)
+            InterlockedExchange(&g_uiDom, 1);
+        else if (g_uiDom != 0 && g_uiRatio < g_sceneOrthoPct * 0.75f)
+            InterlockedExchange(&g_uiDom, 0);
+    }
+    g_frmOrtho = g_frmScene = g_frmNoCB = 0;
     int nTracks = 0;
     const term::Track* tracks = nullptr;
     const char* const* labels = nullptr;
     const hud::Line* lines = nullptr;
     int nLines = 0;
     const bool detOn = det::Active();
+    // Muted producers get empty feeds so FP tracks coast out behind the gate.
+    const bool sceneMuted = g_uiDom != 0 || det::SceneMuted();
+    det::SetMuted(sceneMuted);
+    targets::SetMuted(sceneMuted);
     if (detOn)
     {
         tracks = det::Update(dt, static_cast<int>(g_hudMaxTargets), &nTracks);
@@ -1259,11 +1334,30 @@ void TerminatorOverlay(ID3D11DeviceContext* ctx, IDXGISwapChain* target) noexcep
         {
             char tgt[24];
             _snprintf_s(tgt, _TRUNCATE, "TGT %02d", nTracks);
-            const char* status[4] = { "TERMINATOR VISION",
+            // Scene-gate status: observable proof the mute is engaged. Brackets
+            // and sight lines are muted; reticle/text/status keep drawing.
+            char muteBuf[40] = {};
+            const char* muteText = nullptr;
+            if (sceneMuted)
+            {
+                if (g_uiDom != 0)
+                {
+                    _snprintf_s(muteBuf, _TRUNCATE, "ORTHO BLOCK %.2f",
+                                static_cast<double>(g_uiRatio));
+                    muteText = muteBuf;
+                }
+                else
+                    muteText = det::MuteReason();
+            }
+            const char* status[5] = { "TERMINATOR VISION",
                                       g_termOnnx != 0 ? "AI ONNX DML" : "AI HLSL",
-                                      detOn ? "DET ONNX" : "SCAN AABB", tgt };
-            hud::Draw(ctx, rtv, w, h, g_termBrackets != 0 ? tracks : nullptr, nTracks,
-                      status, 4, labels, lines, nLines);
+                                      detOn ? "DET ONNX" : "SCAN AABB", tgt,
+                                      muteText };
+            hud::Draw(ctx, rtv, w, h,
+                      (g_termBrackets != 0 && !sceneMuted) ? tracks : nullptr,
+                      sceneMuted ? 0 : nTracks,
+                      status, muteText != nullptr ? 5 : 4,
+                      labels, sceneMuted ? nullptr : lines, sceneMuted ? 0 : nLines);
         }
         if (g_termLens != 0)
             retro::ApplyTo(ctx, bb, retro::Fx::TermLens);
@@ -2970,5 +3064,57 @@ void hooks::LoadConfigFile() noexcept
         cfg::ReadFloat(buf, "DetClsConf", &detClsConf);
         det::SetConfig(detModel, detModel2, detConf, detStride, detSight, detLen,
                        classes, weapons, classes2, weapons2, detDump, detModel3, detClsConf);
+    }
+
+    // Scene gates + tracker/decoder hardening (Terminator Vision). Every key
+    // optional; defaults reproduce the pre-gate behavior.
+    {
+        term::Tuning tt;
+        cfg::ReadFloat(buf, "TrkIou", &tt.iouMatch);
+        cfg::ReadFloat(buf, "TrkDist", &tt.distMatch);
+        cfg::ReadFloat(buf, "TrkEma", &tt.ema);
+        cfg::ReadFloat(buf, "TrkCoast", &tt.coast);
+        cfg::ReadFloat(buf, "TrkLockAfter", &tt.lockAfter);
+        term::SetTuning(tt);
+
+        float orthoPct = 0.0f;
+        cfg::ReadFloat(buf, "SceneOrthoPct", &orthoPct);
+        g_sceneOrthoPct = orthoPct < 0.0f ? 0.0f : (orthoPct > 1.0f ? 1.0f : orthoPct);
+        int orthoMin = 16;
+        cfg::ReadInt(buf, "SceneOrthoMin", &orthoMin);
+        g_sceneOrthoMin = orthoMin < 1 ? 1 : orthoMin;
+
+        float nmsIou = 0.45f;
+        cfg::ReadFloat(buf, "DetNmsIou", &nmsIou);
+        bool nmsAg = false;
+        cfg::ReadBool(buf, "DetNmsAg", &nmsAg);
+        int minH = 2;
+        cfg::ReadInt(buf, "DetMinHits", &minH);
+        int minHW = 4;
+        cfg::ReadInt(buf, "DetMinHitsWeapon", &minHW);
+        int envCls = -1;
+        cfg::ReadInt(buf, "DetEnvCls", &envCls);
+        bool envNeed = false;
+        cfg::ReadBool(buf, "DetEnvNeed", &envNeed);
+        int dumpEvery = 0;
+        cfg::ReadInt(buf, "DetDumpEvery", &dumpEvery);
+        bool depthGate = false;
+        cfg::ReadBool(buf, "DetDepthGate", &depthGate);
+        float depthVar = 2e-4f;
+        cfg::ReadFloat(buf, "DetDepthVar", &depthVar);
+        float detConf2 = -1.0f; // <0: sess-1 shares DetConf
+        cfg::ReadFloat(buf, "DetConf2", &detConf2);
+        float sameObjIou = 0.55f; // weapon box ≈ person box ⇒ relabeled person
+        cfg::ReadFloat(buf, "DetSameObjIoU", &sameObjIou);
+        det::SetTunables(nmsIou, nmsAg, minH, minHW, envCls, envNeed,
+                         dumpEvery, depthGate, depthVar, detConf2, sameObjIou);
+        Log::Info("term", "scene gates: orthoPct=%.2f(min=%d) depth=%d(var=%.5f) "
+                  "trk(iou=%.2f dist=%.2f ema=%.2f coast=%.2f lock=%.2f) "
+                  "nms=%.2f ag=%d conf2=%.2f hits=%d/%d env=%d:%d dumpEvery=%d",
+                  g_sceneOrthoPct, g_sceneOrthoMin, depthGate ? 1 : 0,
+                  static_cast<double>(depthVar), tt.iouMatch, tt.distMatch, tt.ema,
+                  tt.coast, tt.lockAfter, nmsIou, nmsAg ? 1 : 0,
+                  static_cast<double>(detConf2), minH, minHW,
+                  envCls, envNeed ? 1 : 0, dumpEvery);
     }
 }

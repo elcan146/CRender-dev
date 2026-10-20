@@ -28,6 +28,19 @@ struct Track
     int   hits = 0;       // matched-pass count (confirmation gate)
 };
 
+// Scene-gate / false-positive tunables (retro.json Trk* keys). One global set
+// applies to every Tracker instance (detector + mesh-AABB scan).
+struct Tuning
+{
+    float iouMatch  = 0.25f; // primary association IoU
+    float distMatch = 0.08f; // fallback centroid distance (normalized)
+    float ema       = 0.35f; // smoothing: weight of the new detection
+    float coast     = 0.35f; // seconds a track survives unmatched
+    float lockAfter = 1.2f;  // seconds tracked before "LOCK"
+};
+
+void SetTuning(const Tuning& t) noexcept;
+
 class Tracker
 {
 public:

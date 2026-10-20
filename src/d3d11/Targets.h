@@ -30,6 +30,10 @@ void OnDraw(ID3D11Buffer* vb, UINT stride, UINT vbOffset, ID3D11Buffer* vsCB0) n
 // Returns the live track list (valid until the next EndFrame).
 const term::Track* EndFrame(float dt, int maxTargets, int* count) noexcept;
 
+// Scene gate (render thread): while muted the tracker is fed an empty list, so
+// stale/false-positive tracks coast out instead of stacking hits behind the gate.
+void SetMuted(bool muted) noexcept;
+
 void Reset() noexcept;
 
 } // namespace targets
