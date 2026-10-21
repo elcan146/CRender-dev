@@ -48,8 +48,9 @@ def main() -> None:
            for o in mod.graph.output}
     print(f"outputs: {sig}")
     dims = next(iter(sig.values()))
-    if len(dims) != 3 or dims[0] != 1 or min(dims[1], dims[2]) != 4 + 80:
-        raise SystemExit("unexpected output layout — expected [1,84,N] or [1,N,84]")
+    # Detector contract: [1,4+nCls,N] or [1,N,4+nCls] — box rows + class scores.
+    if len(dims) != 3 or dims[0] != 1 or min(dims[1], dims[2]) < 5:
+        raise SystemExit("unexpected output layout — expected [1,4+nCls,N] or [1,N,4+nCls]")
 
     os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
     if os.path.abspath(exported) != os.path.abspath(out):

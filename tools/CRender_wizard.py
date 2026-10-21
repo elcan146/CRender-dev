@@ -42,7 +42,7 @@ NEURAL_MODELS = [
     (ROOT / "config" / "terminator_vision.onnx", "terminator_vision.onnx"),
     (ROOT / "config" / "yolov8n.onnx", "yolov8n.onnx"),
     (ROOT / "config" / "det_weapons.onnx", "det_weapons.onnx"),
-    (ROOT / "config" / "best.onnx", "best.onnx"),  # BecayeSoft gun detector (1 class)
+    (ROOT / "config" / "weapons_m.onnx", "weapons_m.onnx"),  # 4-class YOLOv8m: gun/rifle/heavy/knife
 ]
 
 def neural_files(arch: str) -> list[tuple[Path, str]]:
@@ -312,21 +312,21 @@ class Window(QMainWindow):
         cfg["TermHud"] = 1 if self.term_fx.isChecked() else 0
         # TermLens stays at the template default (off) — no fisheye/CRT filter.
         # Clean HUD — matches the desktop overlay: no reticle, no side text,
-        # no sight lines, GUN-only weapon session (no knife).
+        # no sight lines, firearm classes only (gun/rifle/heavy, no knife).
         cfg["TermHudText"] = 0
         cfg["TermReticle"] = 0
         cfg["DetSight"] = False
-        cfg["DetClasses2"] = "0"
-        cfg["DetWeapon2"] = "0"
-        # Weapon session: best.onnx (1-class 'gun') scanned on person crops.
-        # In-game scores sit at 0.15-0.45 raw, so keep the low conf floor —
-        # the DLL's crop-fill/flicker/dedup gates do the FP filtering.
+        cfg["DetClasses2"] = "0,1,2"
+        cfg["DetWeapon2"] = "0,1,2"
+        # Weapon session: weapons_m.onnx (4-class YOLOv8m) scanned on person
+        # crops. In-game scores sit at 0.15-0.45 raw, so keep the low conf
+        # floor — the DLL's crop-fill/flicker/dedup gates do the FP filtering.
         # Inert when the ONNX files aren't deployed.
-        cfg["DetModel2"] = "best.onnx"
+        cfg["DetModel2"] = "weapons_m.onnx"
         cfg["DetConf"] = 0.15
         # Weapon-session floor: desktop/stream UIs are full of pistol-shaped
         # icons that clear 0.15. Persons keep the loose floor; guns need more.
-        cfg["DetConf2"] = 0.22
+        cfg["DetConf2"] = 0.40
         cfg["DetSameObjIoU"] = 0.55
         # Stage-2 (DetModel3) left off: det_weapons.onnx is real-world-trained
         # and scores ~0.01-0.5 on game guns — as a gate it eats detections.
@@ -338,7 +338,7 @@ class Window(QMainWindow):
         # died before drawing).
         cfg["HudMaxTargets"] = 12
         cfg["DetMinHits"] = 2
-        cfg["DetMinHitsWeapon"] = 1
+        cfg["DetMinHitsWeapon"] = 2
         # Scene gates: ortho-ratio latches when UI/2D draws dominate the frame
         # (menus, pause screens) and depth-variance mutes on flat depth — the
         # two biggest false-positive generators for the Terminator HUD.

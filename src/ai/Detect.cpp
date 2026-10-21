@@ -93,9 +93,9 @@ SRWLOCK       g_cfgLock = SRWLOCK_INIT;
 // Class-space: session-0 ids are as-is; session-1 ids are offset +1000 so both
 // models' boxes share one tracker/label space.
 constexpr int kSess1Base = 1000;
-// Labels for det_weapons.onnx (JoaoAssalim YOLOv8n: guns/knife). Numeric ids are
-// shown as OBJ nn for anything past this table.
-const char* kSess1Names[] = { "GUN", "KNIFE" };
+// Labels for weapons_m.onnx (4-class weapon detector: gun/rifle/heavy/knife).
+// Numeric ids are shown as OBJ nn for anything past this table.
+const char* kSess1Names[] = { "GUN", "RIFLE", "HEAVY", "KNIFE" };
 constexpr int kSess1NamesN = static_cast<int>(sizeof(kSess1Names) / sizeof(kSess1Names[0]));
 
 // ---- per-session state ----

@@ -146,7 +146,7 @@ COCO = ("person bicycle car motorcycle airplane bus train truck boat "
         "potted plant bed dining table toilet tv laptop mouse remote "
         "keyboard cell phone microwave oven toaster sink refrigerator book "
         "clock vase scissors teddy bear hair drier toothbrush").split(" ")
-SESS1_NAMES = ["GUN", "KNIFE"]
+SESS1_NAMES = ["GUN", "RIFLE", "HEAVY", "KNIFE"]
 
 
 def _class_id(tok: str) -> int:
@@ -206,10 +206,9 @@ class Config:
             "DetClasses", "person")) or [0] if c != 43]       # no COCO knife
         self.weapons = set(_csv_ids(a.weapons or cfg.get("DetWeapon", "")))
         self.weapons.discard(43)
-        self.classes2 = [c for c in _csv_ids(a.classes2 or cfg.get(
-            "DetClasses2", "0,1")) or [0, 1] if c != 1]       # no KNIFE
-        self.weapons2 = set(_csv_ids(a.weapons2 or cfg.get("DetWeapon2", "0,1")))
-        self.weapons2.discard(1)
+        self.classes2 = _csv_ids(a.classes2 or cfg.get(
+            "DetClasses2", "0,1,2")) or [0, 1, 2]     # gun+rifle+heavy, no knife
+        self.weapons2 = set(_csv_ids(a.weapons2 or cfg.get("DetWeapon2", "0,1,2")))
         self.person_cls = 0                        # g_cfg.personClass
         # Scene-gate knobs (det::SetTunables parity). NMS + hit confirmation
         # port cleanly; the ortho-ratio and depth-variance gates are D3D11-hook

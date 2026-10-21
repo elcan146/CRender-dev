@@ -89,6 +89,10 @@ captures/
 # Uncomment if models should not be committed:
 # *.onnx
 
+# --- Test models (too large for GitHub) ---
+config/test-[3-9]*
+config/test-1[01]*
+
 # --- Python (tools/scripts) ---
 __pycache__/
 *.py[cod]
