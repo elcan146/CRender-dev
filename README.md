@@ -1,9 +1,13 @@
+<p align="center">
+  <img src="logo.png" height="300" alt="CRender — target detection overlay">
+</p>
+
 # CRender
 
 D3D11 proxy DLL that intercepts a game's rendering pipeline and re-presents frames in a
-retro style: **GPU ASCII shader pass** (primary) and/or **CPU console wireframe** (secondary).
-
-![ASCII mode in Unigine Heaven](docs/images/heaven_ascii_1440p.png)
+retro style: **GPU ASCII shader pass** (primary), **CPU console wireframe** (secondary),
+and a **Terminator-vision** stack that runs ONNX detection/style models on the GPU via
+ONNX Runtime DirectML.
 
 > Offline / single-player targets only. Graphics-layer interception (ReShade/DXVK category).
 > No game-state writes, no anti-cheat interaction.
@@ -11,19 +15,21 @@ retro style: **GPU ASCII shader pass** (primary) and/or **CPU console wireframe*
 ## Status
 
 **Phase 12+** — performance pass (`RenderScale`, skip rules, `GpuBurn`) landed on top of the
-full presentation layer; Terminator stack runs ONNX models on ORT-DML with an HLSL fallback.
+full presentation layer; Terminator stack runs up to **three** ORT-DML sessions per frame
+(style base + two detectors + optional crop classifier) with an HLSL fallback.
 Technical report: [`docs/CRender-Technical-Report.pdf`](docs/CRender-Technical-Report.pdf)
-(HTML source + numbered ONNX graph SVGs under `docs/images/`).
+(HTML source + internals notes under [`docs/`](docs/), numbered ONNX graph SVGs under
+[`docs/images/`](docs/images/) — see [Model graphs](#model-graphs)).
 
 | Piece | State |
 |---|---|
 | `d3d11.dll` proxy (x86 + x64, `/MT`, KERNEL32-only) | 51 exports, correct ordinals |
 | **Perf (Phase 12)** | `RenderScale` N — real backbuffer created at 1/N (`BufferDesc` shrunk + `STRETCH`; verified on Heaven — believed dims kept so texel-`Load()` post stays consistent) + screen-sized RT/DS textures at 1/N, viewports/scissors rescaled; `SkipShadows`, `SkipPS` hash blocklist, `ShaderStrip` skip rules; `GpuBurn` N — synthetic per-frame GPU load for benchmarking; `PassDump` logs `ps=%016llx` per pass; stats line reports `fps=`/`cpuFrameMs=`/`skipped=` |
 | Context hooks | counters + `PSSetShader`/`RSSetState`/`VSSetCBs`/`UpdateSubresource`/`IASetVertexBuffers`/`IASetIndexBuffer` |
-| **Modes** | `Off / NullPS / FlatPS / Wireframe / RetroFX / Ascii / ConsoleWire / Terminator` — F9, F10, F11. `"Neural"` in config maps to `Terminator` |
-| **Terminator** | Three layers on the presented frame: base = ONNX model on the GPU via ONNX Runtime **DirectML EP** (`LoadLibrary`'d, zero-copy shared-buffer interop) with an HLSL Sobel/luma fallback when ORT or the model is unavailable → HUD overlay (`TermHud*` keys: instanced glyph text/reticle, target brackets) → lens (`TerminatorLens`: CRT barrel + scanlines + red vignette). `TermEdgeGain`/`TermTint` re-grade the model's `R=bg+e, G=B=0.7e` encoding; `HudMaxTargets` caps brackets. `Ai*` keys drive the ONNX base; stats `aiMs=` |
-| **Terminator detect** | Up to **two** ORT/DML detector sessions on the raw frame: `DetModel` (session 0, COCO names in `DetClasses`/`DetWeapon`) + optional `DetModel2` (session 1, `DetClasses2`/`DetWeapon2` numeric ids — e.g. `det_weapons.onnx` 0=guns,1=knife). YOLOv8-style `[1,4+K,N]` output, per-class NMS, merged into `term::Tracker` (session-1 ids offset +1000, shown as `GUN`/`KNIFE`/`DET nn`); `DetSight` draws dotted weapon→owner rays anchored on `person` tracks. No model → mesh-AABB scan fallback. `tools/ai/fetch_detector.py` exports `yolov8n.onnx` (`pip install ultralytics onnx`) |
-| **Hotkeys** | F9 cycle (Off→RetroFX→Ascii→Terminator) · F10 panic toggle · F11 reload config · **F12 RenderDoc capture** (when injected) |
+| **Modes** | `Off / NullPS / FlatPS / Wireframe / RetroFX / Ascii / ConsoleWire / Terminator` — F9, F10, F11 (default `Mode: "Ascii"`). `"Neural"` in config maps to `Terminator` |
+| **Terminator** | Three layers on the presented frame: base = ONNX model on the GPU via ONNX Runtime **DirectML EP** (`LoadLibrary`'d, zero-copy shared-buffer interop) with an HLSL Sobel/luma fallback when ORT or the model is unavailable → HUD overlay (`TermHud*` keys: instanced glyph text/reticle, target brackets) → lens (`TerminatorLens`: CRT barrel + scanlines + red vignette). `TermEdgeGain`/`TermTint` re-grade the model's `R=bg+e, G=B=0.7e` encoding; `HudMaxTargets` caps brackets. `Ai*` keys drive the ONNX base; stats `aiMs=`. Default config = **clean overlay**: `TermBase`/`TermBaseOnnx`/`TermLens`/`TermReticle` off, brackets + tracker only |
+| **Terminator detect** | Up to **three** ORT/DML sessions on the raw frame: `DetModel` (session 0, COCO names via `DetClasses`/`DetWeapon` — default `yolov8n.onnx`) + `DetModel2` (session 1, numeric ids via `DetClasses2`/`DetWeapon2` — default `weapons_m.onnx`, **4-class YOLOv8m**: gun/rifle/heavy/knife, classes 0–2 enabled) + optional `DetModel3` (session 2 — `[1,C]` classifier or second weapon detector run as a second-opinion crop check, keep threshold `DetClsConf`). YOLOv8-style `[1,4+K,N]` output, per-class NMS (`DetNmsIou`/`DetNmsAg`), merged into `term::Tracker` (session-1 ids offset +1000, shown as `GUN`/`KNIFE`/`DET nn`); `DetSight` draws dotted weapon→owner rays anchored on `person` tracks; `DetMinHitsWeapon` requires N consecutive frames before a weapon track confirms; `DetSameObjIoU` relabels weapon-box==person-box false positives. No model → mesh-AABB scan fallback. `tools/ai/fetch_detector.py` exports `yolov8n.onnx` (`pip install ultralytics onnx`) |
+| **Hotkeys** | **F8 cycle ASCII palette** · F9 cycle (Off→RetroFX→Ascii→Terminator) · F10 panic toggle · F11 reload config · **F12 RenderDoc capture** (when injected) |
 | **RetroFX** | pixelate + 3-bit palette + scanlines + CRT barrel + vignette (`Crt`/`Vignette`) |
 | **Ascii** | cell-grid glyph atlas — `CellPx` (min 4, 8 recommended), 4-tap luminance, **`Palette`: green/amber/mono/cyan/color**. With `RenderScale` > 1, RetroFX/Ascii run at native output res (crisp glyphs) sampling the low-res scene |
 | **ConsoleWire** | `world*view*proj` → `WriteConsoleW` grid — **slope-matched `─│╲╱` edges**, depth fade (`─`→`+`→`.`), backface cull (`WireCull`) |
@@ -38,6 +44,16 @@ launch (RTs + backbuffer are created once): it shrinks the real backbuffer (`Buf
 `STRETCH` scaling) so texel-space `Load()` pipelines like Unigine's stay consistent — RT-only
 scaling blacks the screen because the final composite would read shrunken sources at native
 coords. If SSAO/deferred passes sample wrong, try `"PatchScreenCB": 1`.
+
+## Progress so far
+
+- **Restructure** — project renamed RetroIntercept → **CRender**, sources moved to repo root.
+- **Screen overlay** — `tools/screen_vision.py` live desktop preview of the Terminator/ASCII pipeline; screen-capture UI tests under `tools/ai/`.
+- **Docker** — Windows build container compiles x86+x64 artifacts; Linux image for AI tooling ([`docker/`](docker/)).
+- **Clean overlay mode** — default config and wizard now ship HUD-brackets-only Terminator (no base re-grade, lens, reticle, or HUD text) for max FPS; every layer still individually togglable via `Term*` keys.
+- **Weapon detector v3** — `best.onnx` → **`weapons_m.onnx`** (4-class YOLOv8m: gun/rifle/heavy/knife, classes 0–2 enabled via `DetClasses2`/`DetWeapon2`). Tuned thresholds: `DetConf2` 0.35 (wizard 0.40), `DetMinHitsWeapon` 2 frames, `DetNmsIou` 0.50 — fewer false positives, slower but confirmed tracks.
+- **Third detector session** — `DetModel3` hook for a `[1,C]` crop classifier or second-opinion detector behind `DetClsConf`.
+- **Model zoo** — `config/` carries the active stack (`terminator_vision`, `retro_ai`, `retro_ai_temporal`, `yolov8n`, `weapons_m`, `gun_new`, `det_weapons`, `best`, `test-2`, `test-12`); oversized experiments (`test-3`…`test-11`, >100 MB) are git-ignored; per-model Netron-style graphs live in `docs/images/`.
 
 ## Target
 
@@ -81,7 +97,8 @@ line latches the ONNX path off until F11 (HLSL fallback takes over).
 The bundled placeholder is a real pixel-art pass (blockify → saturate → contrast →
 posterize) built from pure DirectML-friendly ops — tune with `--pixels`, `--levels`,
 `--saturation`, `--contrast`, or use `--style edge` for the old conv edge look. For actual
-style-transfer art, drop in any fp32 NCHW `[1,3,H,W]` ONNX as `retro_ai.onnx`.
+style-transfer art, drop in any fp32 NCHW `[1,3,H,W]` ONNX as `retro_ai.onnx` — or point
+`AiModel` at `terminator_vision.onnx` (the default edge-highlight Terminator net).
 
 ### Docker
 
@@ -108,20 +125,62 @@ python tools/screen_vision.py     # desktop preview of the Terminator/ASCII pipe
 python tools/ai/render_model_graph.py --all config docs/images   # Netron-style model graphs (PNG+SVG)
 ```
 
+AI helpers under `tools/ai/`: `fetch_detector.py` (YOLOv8 → ONNX export + class validation),
+`make_terminator_onnx.py` / `make_placeholder.py` / `wrap_style.py` (style-net builders),
+`export_legacy.py` (legacy `.pt` → ONNX), `sanity_check.py` / `verify_terminator.py`
+(pipeline checks), `test_weapons_screen.py` / `test_bestgun.py` / `test_cascade_ui.py`
+(screen-capture detector evals, sample outputs in `tools/ai/testimg/`).
+
 ## Layout
 
 ```
 src/proxy/    d3d11.dll export forwarding + proxy entry
 src/core/     config + logging
 src/d3d11/    hooks, render passes, state tracking
-src/ai/       ONNX Runtime / DirectML inference
+src/ai/       ONNX Runtime / DirectML inference + detector sessions
 src/term/     HUD + target tracker
 config/       retro.json, ONNX models, per-game configs
-docs/         technical report (HTML+PDF), ONNX model graphs (1-…6-*.svg), internals notes, images
+docs/         technical report (HTML+PDF), internals notes, model graph SVGs
 tools/        installer GUI/CLI, AI helpers, test_cube
 third_party/  MinHook, ONNX Runtime, style models
+docker/       Windows build container + Linux AI tooling image
 ```
+
+## Docs
+
+- [`docs/CRender-Technical-Report.pdf`](docs/CRender-Technical-Report.pdf) / [`.html`](docs/CRender-Technical-Report.html) — full writeup: proxy layer, hooks, render modes, RenderScale, AI pipeline.
+- [`docs/cb144.txt`](docs/cb144.txt), [`docs/cb_groups.txt`](docs/cb_groups.txt), [`docs/ilayouts.txt`](docs/ilayouts.txt) — internals notes: 144-byte constant-buffer layout, CB groups observed in Heaven, input-layout dumps.
+- [`docs/images/`](docs/images/) — numbered Netron-style ONNX model graphs (`1-`…`6-*.svg`), rendered by `tools/ai/render_model_graph.py`; concatenated source in `model_graphs_all.txt`.
+
+## Model graphs
+
+| Graph | Model | Role |
+|---|---|---|
+| `1-terminator_vision` | `terminator_vision.onnx` | `AiModel` — Terminator base style net (edge-highlight `R=bg+e` encoding) |
+| `2-retro_ai` | `retro_ai.onnx` | bundled pixel-art style pass (blockify → saturate → contrast → posterize) |
+| `3-retro_ai_temporal` | `retro_ai_temporal.onnx` | two-input temporal variant (`AiTemporal`) |
+| `4-yolov8n` | `yolov8n.onnx` | `DetModel` session 0 — COCO person/general detector |
+| `5-det_weapons` | `det_weapons.onnx` | earlier 2-class weapon detector (guns/knife) |
+| `6-best` | `best.onnx` | fine-tuned detector — former session-1 model, superseded by `weapons_m.onnx` |
+
+### 1 — terminator_vision.onnx
+<img src="docs/images/1-terminator_vision.svg" width="420" alt="terminator_vision.onnx graph">
+
+### 2 — retro_ai.onnx
+<img src="docs/images/2-retro_ai.svg" width="420" alt="retro_ai.onnx graph">
+
+### 3 — retro_ai_temporal.onnx
+<img src="docs/images/3-retro_ai_temporal.svg" width="420" alt="retro_ai_temporal.onnx graph">
+
+### 4 — yolov8n.onnx
+<img src="docs/images/4-yolov8n.svg" width="420" alt="yolov8n.onnx graph">
+
+### 5 — det_weapons.onnx
+<img src="docs/images/5-det_weapons.svg" width="420" alt="det_weapons.onnx graph">
+
+### 6 — best.onnx
+<img src="docs/images/6-best.svg" width="420" alt="best.onnx graph">
 
 ## Safety / legal
 
-For games you own, offline, no anti-cheat. See `docs/agent-prompt.md` §2.1 for the full constraints.
+For games you own, offline, no anti-cheat.
